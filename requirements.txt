@@ -1,0 +1,6 @@
+# ComfyUI-WanNodeExperiments — hard requirements.
+# torch is provided by ComfyUI itself and is intentionally not pinned here.
+numpy
+PyWavelets>=1.4
+opencv-python>=4.8
+torchvision>=0.16

@@ -1,0 +1,43 @@
+ComfyUI-WanNodeExperiments
+Copyright (c) 2026 Halohues Studios (ml@halohuesstudios.com)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+============================================================================
+ATTRIBUTION — foundational work this pack is derived from / inspired by
+============================================================================
+
+1. ComfyUI-WanVideoWrapper — Kijai
+   https://github.com/kijai/ComfyUI-WanVideoWrapper
+   License: Apache-2.0. Copyright (c) Kijai and contributors.
+   Wan 2.2 model loaders, GGUF support, samplers/schedulers, 3D VAE tiling and
+   context-window logic in this pack are derived from and refined upon this work.
+
+2. ComfyUI-WanAnimatePlus — wuwukasi / wuwukaka
+   https://github.com/wuwukaka/ComfyUI-WanAnimatePlus
+   License: Apache-2.0. Copyright (c) 2026 wuwukasi/wuwukaka.
+   This is itself a fork/derivative of ComfyUI-WanVideoWrapper. Wan Animate
+   extensions and related loader/sampler refinements are derived from this work.
+   Per the upstream NOTICE, this attribution is retained; modified/derived
+   portions and the affected modules are documented in MODIFICATIONS.md.
+
+3. LTX Director — WhatDreamsCost
+   https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI
+   Upstream license: GPL-3.0. The WanDirector timeline-editor features in this
+   pack are derived from LTX Director 2.0 and are used here WITH THE EXPRESS
+   PERMISSION OF THE AUTHOR (WhatDreamsCost), granted to Halohues Studios, to
+   copy/adapt and redistribute under this pack's Apache-2.0 license. See
+   MODIFICATIONS.md for the permission record and affected modules.
+
+4. Prompt Relay — gordonchen19 / Kijai
+   https://gordonchen19.github.io/Prompt-Relay/
+   Per-segment prompt-relay concepts used by the Director.
+
+============================================================================
+RESEARCH METHODS (implemented from public papers / reference code; credited
+per-node in source docstrings)
+============================================================================
+APG (2410.02416) · ZeResFDG / CADE 2.5 (2510.12954) · STG (2411.18664) ·
+FreeInit (2312.07537) · AnyFlow (2605.13724, NVlabs) · UltraViCo (2511.20123) ·
+FreeLOC (2603.25209, Westlake-AGI-Lab) · RefDecoder (2605.15196) ·
+WF-VAE (2411.17459) · RIFLEx (2502.15894) · TeaCache / MagCache.
