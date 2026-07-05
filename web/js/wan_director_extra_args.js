@@ -3,6 +3,7 @@
 // enables are off, so the node is short; flip one on and its params appear.
 // (Same rule the user wants across every node.)
 import { app } from "/scripts/app.js";
+import { wdVueNudge } from "./_wan_director_ui.js";
 
 // gated widget -> predicate over the current widget values
 const GATES = {
@@ -41,6 +42,9 @@ function setHidden(w, hidden) {
         w.hidden = false;
         if (w.element) { w.element.style.display = ("__wne_d" in w) ? (w.__wne_d ?? "") : ""; delete w.__wne_d; }
     }
+    // Nodes 2.0 (Vue renderer) decides row visibility from options.hidden.
+    w.options = w.options || {};
+    w.options.hidden = !!hidden;
 }
 
 function apply(node) {
@@ -50,6 +54,7 @@ function apply(node) {
         const g = GATES[w.name];
         if (g) setHidden(w, !g(vals));
     }
+    wdVueNudge(node);
     const sz = node.computeSize();
     node.size[0] = Math.max(node.size[0], sz[0]);
     node.size[1] = sz[1];

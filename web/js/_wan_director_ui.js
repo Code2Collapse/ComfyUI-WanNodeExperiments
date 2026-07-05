@@ -28,30 +28,21 @@ export function writeWdNodeSize(node, w, h) {
 }
 
 export function capWdComputeSize(sz) {
-    // Do NOT cap the height to the viewport: the full widget stack (timeline +
-    // player + props + advanced) is ~2000px, far taller than 88% of the
-    // viewport. Capping shorter than the content pushed show_advanced and every
-    // widget below the timeline OUTSIDE the node's clickable bounds ("below not
-    // responsive" / "show_advanced does nothing"). Size to the real content; a
-    // tall node is fine (the user pans). Keep a sane minimum only.
+    const cap = wdMaxH();
     return [
         Math.max(sz?.[0] || WD_DEFAULT_W, WD_DEFAULT_W),
-        Math.max(sz?.[1] || 520, 520),
+        Math.min(sz?.[1] || cap, cap),
     ];
 }
 
 export function capWdNode(node) {
     if (!node?.size) return;
-    // Size the node to its real content height (computeSize) instead of the
-    // viewport cap, so the bottom widgets stay inside the clickable node body.
-    // IMPORTANT: size to the CURRENT natural content height, NOT max(current,
-    // natural) — the old max() ratcheted height up-only, so collapsing
-    // "show_advanced" never shrank the node (the advanced area stayed as dead
-    // space → "show_advanced doesn't close"). computeSize already reflects
-    // hidden widgets ([0,-4]), so it grows on expand and shrinks on collapse.
-    const natural = (typeof node.computeSize === "function") ? node.computeSize() : null;
-    const h = Math.max(natural ? natural[1] : (node.size[1] || 0), 520);
-    writeWdNodeSize(node, Math.max(node.size[0] || 0, WD_DEFAULT_W), h);
+    const cap = wdMaxH();
+    writeWdNodeSize(
+        node,
+        Math.max(node.size[0] || 0, WD_DEFAULT_W),
+        Math.min(node.size[1] || cap, cap),
+    );
     node.setDirtyCanvas?.(true, true);
 }
 
@@ -74,6 +65,72 @@ export function isWdWidgetHidden(w) {
     return !!(w._wd_ui_hidden || w._wd_compact_hidden || w._wd_hidden);
 }
 
+// Nodes 2.0 (Comfy.VueNodes.Enabled) support: the Vue renderer decides row
+// visibility from widget.options.hidden and only rebuilds its widget-row
+// snapshot when a widget is ADDED. So (1) hide/show mirror the state into
+// options.hidden, (2) wdVueNudge adds+removes a throwaway widget to trigger
+// the rebuild (debounced per node per frame; never rendered — the splice
+// lands before the next-frame snapshot).
+function _wdVueActive() {
+    try {
+        return window.app?.ui?.settings?.getSettingValue?.("Comfy.VueNodes.Enabled") === true;
+    } catch (_) { return false; }
+}
+
+export function wdVueNudge(node) {
+    if (!node?.widgets || !_wdVueActive() || node.__wdVueNudgePending) return;
+    // Only nudge once the Vue component for this node exists. Before the
+    // initial mount the fresh snapshot reads options.hidden anyway, and a
+    // rebuild racing the first mount detaches the node's DOM widgets
+    // (timeline/player elements end up orphaned from their rows).
+    if (!document.querySelector(`[data-node-id="${node.id}"]`)) return;
+    node.__wdVueNudgePending = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        node.__wdVueNudgePending = false;
+        try {
+            const d = node.addWidget("number", "__wd_vue_sync__", 0, () => {}, { serialize: false });
+            const i = node.widgets.indexOf(d);
+            if (i >= 0) node.widgets.splice(i, 1);
+        } catch (_) { /* node may be mid-removal */ }
+    }));
+}
+
+// First-instance mount race: when the very first WanDirector of a page load
+// is created, Vue can lose the DOM-widget registration for widgets added
+// while the node component is mid-mount — the row renders empty and the
+// element stays detached forever (a nudge won't fix it; only re-registering
+// does). Called from the timeline's liveness interval as a cheap self-heal.
+export function wdEnsureDomWidgetsAttached(node) {
+    if (!node?.widgets || !_wdVueActive() || node.graph == null) return;
+    if (node.__wdReattachBusy) return;
+    if (!document.querySelector(`[data-node-id="${node.id}"]`)) return;
+    const broken = node.widgets.filter((w) => w?.element && !w.element.isConnected
+        && !(w.options?.hidden || w.type === "hidden" || w.hidden));
+    if (!broken.length) return;
+    node.__wdReattachBusy = true;
+    // Two-phase on purpose: remove first, let Vue flush the removal, THEN
+    // re-add. Splice+add in one tick keeps the same widget identity in the
+    // snapshot diff, so Vue skips re-registration and the element stays
+    // detached (verified live). The pause between phases is what re-keys it.
+    const specs = broken.map((w) => ({
+        name: w.name, type: String(w.type || "div"),
+        el: w.element, opts: w.options || {}, cs: w.computeSize,
+    }));
+    for (const w of broken) {
+        const i = node.widgets.indexOf(w);
+        if (i >= 0) node.widgets.splice(i, 1);
+    }
+    setTimeout(() => {
+        try {
+            for (const s of specs) {
+                const w2 = node.addDOMWidget(s.name, s.type, s.el, s.opts);
+                if (s.cs) w2.computeSize = s.cs;
+            }
+        } catch (_) { /* retried on the next liveness tick */ }
+        node.__wdReattachBusy = false;
+    }, 150);
+}
+
 export function wdHideWidget(w) {
     if (!w || w._wd_ui_hidden) return;
     if (w._wd_ui_orig_cs === undefined) w._wd_ui_orig_cs = w.computeSize;
@@ -83,6 +140,8 @@ export function wdHideWidget(w) {
     w.type = "hidden";
     w.computeSize = () => [0, -4];
     w.draw = () => {};
+    w.options = w.options || {};
+    w.options.hidden = true;
     const el = w.element;
     if (el) {
         el.hidden = true;
@@ -102,6 +161,7 @@ export function wdShowWidget(w) {
     if (w._wd_ui_orig_cs) w.computeSize = w._wd_ui_orig_cs;
     else delete w.computeSize;
     delete w.draw;
+    if (w.options) w.options.hidden = false;
     const el = w.element;
     if (el) {
         el.hidden = false;

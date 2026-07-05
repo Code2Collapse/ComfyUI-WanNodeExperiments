@@ -10,6 +10,9 @@
  * Apache-2.0 © Code2Collapse.
  */
 
+// Absolute import: this file is raw-copied between packs that serve at
+// different URL depths (CNP /extensions/PACK/, WNE /extensions/PACK/js/) —
+// a relative ../../ resolves differently in each and 404s in WNE.
 import { app } from "/scripts/app.js";
 import {
     capWdNode,
@@ -17,6 +20,7 @@ import {
     installWanDirectorPrototype,
     wdHideWidget,
     wdShowWidget,
+    wdVueNudge,
 } from "./_wan_director_ui.js";
 
 // Mirror of nodes/wan_director/director_node.py:VARIANT_TABLE flags
@@ -81,11 +85,12 @@ function applyVariant(node, variant) {
         if (flags.everanimate) showWidget(w); else hideWidget(w);
     }
 
+    wdVueNudge(node);
     capWdNode(node);
     app.graph?.setDirtyCanvas?.(true, true);
 }
 
-// Guard against double-registration when CustomNodePacks ships the same extension.
+// Guard against double-registration when WanNodeExperiments ships the same extension.
 if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirector.VariantGate")) app.registerExtension({
     name: "C2C.WanDirector.VariantGate",
     async beforeRegisterNodeDef(nodeType, nodeData) {
