@@ -13,3 +13,11 @@ try:
     from . import media_probe  # noqa: F401
 except Exception:  # noqa: BLE001
     pass
+
+# Edit-proxy service (Resolve/Premiere pattern): GET /wne/media_proxy
+# transcodes ProRes/EXR/MXF/… once to a frame-accurate H.264 proxy so the
+# Director player + Video Comparer can PLAY them in real time. Guarded.
+try:
+    from . import media_proxy  # noqa: F401
+except Exception:  # noqa: BLE001
+    pass
