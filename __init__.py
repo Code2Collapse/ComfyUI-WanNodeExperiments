@@ -91,6 +91,21 @@ except Exception as _cm_exc:  # noqa: BLE001
     except Exception:  # noqa: BLE001
         pass
 
+# ── Audio Separation + InfiniteTalk V2V lip-sync suite ───────────────────────
+try:
+    from .nodes.audio_lipsync import (
+        NODE_CLASS_MAPPINGS as _al_map,
+        NODE_DISPLAY_NAME_MAPPINGS as _al_disp,
+    )
+    NODE_CLASS_MAPPINGS.update(_al_map)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_al_disp)
+except Exception as _al_exc:  # noqa: BLE001
+    log.warning("[WanNodeExperiments] audio/lip-sync suite not registered: %s", _al_exc)
+    try:
+        IMPORT_FAILURES["audio_lipsync"] = repr(_al_exc)
+    except Exception:  # noqa: BLE001
+        pass
+
 # ── Vendored Kijai ComfyUI-WanVideoWrapper (Apache-2.0; LICENSE kept in wanwrapper/) ──
 # Direct copy of his full node suite so this pack is self-contained (ships to the
 # Linux box without a separate install). Registered under a "WNE_" prefix so it can
