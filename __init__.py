@@ -135,18 +135,21 @@ else:
         except Exception:  # noqa: BLE001
             pass
 
-# ── Vendored wuwukaka ComfyUI-WanAnimatePlus (Apache-2.0; LICENSE kept in wananimateplus/) ──
-# Direct copy of the Animate-Plus fork so this pack is self-contained. It reuses
-# most WanVideoWrapper classes plus unique Animate nodes (EverAnimate, Bernini,
-# SCAIL2, v2 samplers). Registered under "WNE_AP_" so it never collides, fully guarded.
+# ── wuwukaka's ComfyUI-WanAnimatePlus, ported INTO the pack root (Apache-2.0;
+# LICENSE_WANANIMATEPLUS + NOTICE_WANANIMATEPLUS at root, full credit retained).
+# Formerly a wananimateplus/ folder (and before that a broken submodule pointer);
+# dissolved 2026-07-18: its subpackages (fantasyportrait, multitalk, unianimate,
+# wanvideo, …) now live at the pack root, aggregated by animateplus.py. It adds
+# unique Animate nodes (EverAnimate, Bernini, SCAIL2, v2 samplers). Registered
+# under "WNE_AP_" so it never collides, fully guarded.
 # Same load-aware rule: skip if the genuine upstream pack is already installed.
 _wap_upstream = _upstream_present("ComfyUI-WanAnimatePlus")
 if _wap_upstream:
-    log.info("[WanNodeExperiments] upstream %s already installed — skipping our vendored "
-             "wananimateplus copy.", _wap_upstream)
+    log.info("[WanNodeExperiments] upstream %s already installed — skipping our "
+             "in-repo Animate-Plus port.", _wap_upstream)
 else:
     try:
-        from . import wananimateplus as _wap  # noqa: F401
+        from . import animateplus as _wap  # noqa: F401
         _wap_map = getattr(_wap, "NODE_CLASS_MAPPINGS", {}) or {}
         _wap_disp = getattr(_wap, "NODE_DISPLAY_NAME_MAPPINGS", {}) or {}
         _ap_added = 0
@@ -156,11 +159,11 @@ else:
                 NODE_CLASS_MAPPINGS[_pk] = _v
                 NODE_DISPLAY_NAME_MAPPINGS[_pk] = str(_wap_disp.get(_k, _k)) + " (WNE)"
                 _ap_added += 1
-        log.info("[WanNodeExperiments] vendored WanAnimatePlus: +%d nodes (WNE_AP_ prefix)", _ap_added)
+        log.info("[WanNodeExperiments] Animate-Plus port: +%d nodes (WNE_AP_ prefix)", _ap_added)
     except Exception as _wap_exc:  # noqa: BLE001
-        log.warning("[WanNodeExperiments] wananimateplus copy not registered: %s", _wap_exc)
+        log.warning("[WanNodeExperiments] Animate-Plus port not registered: %s", _wap_exc)
         try:
-            IMPORT_FAILURES["wananimateplus"] = repr(_wap_exc)
+            IMPORT_FAILURES["animateplus"] = repr(_wap_exc)
         except Exception:  # noqa: BLE001
             pass
 

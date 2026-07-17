@@ -10,7 +10,7 @@ import comfy.model_management as mm
 
 from accelerate import init_empty_weights
 from ..utils import set_module_tensor_to_device, log
-from ..nodes import WanVideoEncodeLatentBatch
+from ..nodes_animate import WanVideoEncodeLatentBatch
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
 device = mm.get_torch_device()

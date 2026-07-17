@@ -26,20 +26,34 @@ Apache License 2.0 (see `LICENSE`, `NOTICE`).
   of `nodes/` but omitted the full `wanwrapper/` copy; corrected 2026-07-18.)
 
 ### From wuwukaka — ComfyUI-WanAnimatePlus (Apache-2.0, itself a fork of the above)
-- **`wananimateplus/`** — a FULL COPY of the Animate-Plus fork, committed
-  in-repo as normal tracked files. It was previously a git SUBMODULE POINTER
-  (gitlink), which meant the folder was EMPTY on GitHub and on fresh clones —
-  converted to real tracked files 2026-07-18 (201 files incl. the
-  fantasyportrait ONNX face models and all upstream LICENSE files).
-  Registered under a `WNE_AP_` prefix. All credit: **wuwukaka** (and the
-  upstream authors of its bundled components: FantasyPortrait, Ovi/BigVGAN,
-  diffsynth — their licenses are retained in-tree).
+- The FULL Animate-Plus codebase is ported INTO this pack as first-class
+  tracked files (2026-07-18). History of how it got here: originally a git
+  SUBMODULE POINTER (empty on GitHub/fresh clones), then briefly a
+  `wananimateplus/` folder copy, now DISSOLVED into the pack root — no
+  directory named after the upstream project remains:
+  * its subpackages live at the pack root: `fantasyportrait/`, `multitalk/`,
+    `unianimate/`, `wanvideo/`, `Ovi/`, `diffsynth/`, `HuMo/`, `SCAIL/`,
+    `mocha/`, `lynx/`, and the rest (37 folders, incl. the fantasyportrait
+    ONNX face models);
+  * its glue modules live at the pack root: `animateplus.py` (node
+    aggregation, formerly its `__init__.py`), `nodes_animate.py` (formerly
+    its `nodes.py` — renamed because this pack already has a `nodes/`
+    package), `nodes_model_loading.py`, `nodes_sampler.py`,
+    `nodes_utility.py`, `utils.py`, `custom_linear.py`, etc.;
+  * upstream license/attribution retained at root as
+    `LICENSE_WANANIMATEPLUS` + `NOTICE_WANANIMATEPLUS` (and the bundled
+    components' licenses — FantasyPortrait, Ovi/BigVGAN, diffsynth — remain
+    in their subfolders); upstream READMEs kept under `docs/`.
+  All credit for this code: **wuwukaka** (fork) and **Kijai** (base).
+  Registered under a `WNE_AP_` prefix, skipped when the genuine upstream
+  pack is installed.
 - Wan Animate extensions and related loader/sampler refinements folded into
   `nodes/loaders.py` / `nodes/samplers.py` *(Phase 2)*.
 - This NOTICE/attribution is retained per the upstream NOTICE requirement.
 - `nodes/audio_lipsync.py` imports the fantasyportrait ONNX face detector from
-  `wananimateplus/` and the MultiTalk/InfiniteTalk pipeline from `wanwrapper/`
-  (delegation to real upstream code, credited above — not reimplementations).
+  the ported `fantasyportrait/` package and the MultiTalk/InfiniteTalk
+  pipeline from `wanwrapper/` (delegation to real upstream code, credited
+  above — not reimplementations).
 
 ### From WhatDreamsCost — LTX Director 2.0 (upstream GPL-3.0; used WITH PERMISSION)
 - **`nodes/director.py` + `web/js/wan_director*.js`** *(Phase 5)* — WanDirector

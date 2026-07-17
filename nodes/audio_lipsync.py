@@ -279,11 +279,11 @@ class WNE_InfiniteTalkV2V:
     # ── real in-repo ONNX face detection → soft bbox mask ─────────────
     def _auto_face_mask(self, images, node_id):
         import cv2
-        from ..wananimateplus.fantasyportrait.pd_fgc.face_align import FaceAlignment
-        from ..wananimateplus.fantasyportrait.pd_fgc.camer import CameraDemo
-        from ..wananimateplus.fantasyportrait.pd_fgc.pdf import det_landmarks
+        from ..fantasyportrait.pd_fgc.face_align import FaceAlignment
+        from ..fantasyportrait.pd_fgc.camer import CameraDemo
+        from ..fantasyportrait.pd_fgc.pdf import det_landmarks
         base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "wananimateplus", "fantasyportrait", "models")
+                            "fantasyportrait", "models")
         aligner = CameraDemo(face_alignment_module=FaceAlignment(
             providers=["CPUExecutionProvider"],
             alignment_model_path=os.path.join(base, "face_landmark.onnx"),

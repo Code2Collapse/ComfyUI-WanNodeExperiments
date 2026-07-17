@@ -9,18 +9,13 @@
 #   - Forces registered node categories to WanAnimatePlus.
 #   - Keeps WanAnimatePlus nodes isolated from original WanVideoWrapper node names.
 # Licensed under the Apache License, Version 2.0
-try:
-    from .utils import check_duplicate_nodes, log, color_text
-    duplicate_dirs = check_duplicate_nodes()
-    if duplicate_dirs:
-        warning_msg = f"WARNING:  Found {len(duplicate_dirs)} other WanAnimatePlus directories:\n"
-        for dir_path in duplicate_dirs:
-            warning_msg += f"  - {color_text(dir_path, 'yellow')}\n"
-        log.warning(color_text(warning_msg + "Please remove duplicates to avoid possible conflicts.", "red"))
-except Exception:
-    pass
+# (upstream duplicate-directory check removed: this code now lives inside
+# WanNodeExperiments at the pack root, not in its own custom_nodes folder)
 
-from .nodes import (
+# WanAnimatePlus node aggregation — was wananimateplus/__init__.py; the folder
+# was dissolved into the pack root 2026-07-18, so `.nodes` became
+# `.nodes_animate` (the pack already has a `nodes/` package of its own).
+from .nodes_animate import (
     WanAnimatePlusBernini,
     WanAnimatePlusEverAnimateEmbeds,
     WanAnimatePlusSCAIL2Embeds,
