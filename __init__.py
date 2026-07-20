@@ -106,6 +106,21 @@ except Exception as _al_exc:  # noqa: BLE001
     except Exception:  # noqa: BLE001
         pass
 
+# ── T5Gemma encoder loader (files from tools/convert_t5gemma_encoder.py) ──
+try:
+    from .nodes.wan_t5gemma_loader import (
+        NODE_CLASS_MAPPINGS as _t5g_map,
+        NODE_DISPLAY_NAME_MAPPINGS as _t5g_disp,
+    )
+    NODE_CLASS_MAPPINGS.update(_t5g_map)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_t5g_disp)
+except Exception as _t5g_exc:  # noqa: BLE001
+    log.warning("[WanNodeExperiments] T5Gemma loader not registered: %s", _t5g_exc)
+    try:
+        IMPORT_FAILURES["wan_t5gemma_loader"] = repr(_t5g_exc)
+    except Exception:  # noqa: BLE001
+        pass
+
 # ── Vendored Kijai ComfyUI-WanVideoWrapper (Apache-2.0; LICENSE kept in wanwrapper/) ──
 # Direct copy of his full node suite so this pack is self-contained (ships to the
 # Linux box without a separate install). Registered under a "WNE_" prefix so it can
