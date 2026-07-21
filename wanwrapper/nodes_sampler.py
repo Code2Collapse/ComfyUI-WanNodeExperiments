@@ -1029,6 +1029,10 @@ class WanVideoSampler:
                     torch.tensor([0], device=device),
                     lynx_ref_text_embed["prompt_embeds"],
                     seq_len=math.ceil((lynx_ref_latent.shape[2] * lynx_ref_latent.shape[3]) / 4 * lynx_ref_latent.shape[1]),
+                    freqs=freqs,  # WNE fix: forward the precomputed RoPE freqs. With the
+                                  # "default" rope path the model only builds freqs internally
+                                  # for "comfy" rope, so without this the ref-buffer forward
+                                  # hit rope_apply_3d(None) -> 'NoneType' has no attribute 'split'.
                     lynx_embeds=lynx_embeds
                 )
                 log.info(f"Extracted {len(lynx_ref_buffer)} cond ref buffers")
@@ -1043,6 +1047,7 @@ class WanVideoSampler:
                         torch.tensor([0], device=device),
                         lynx_ref_text_embed["prompt_embeds"],
                         seq_len=math.ceil((lynx_ref_latent.shape[2] * lynx_ref_latent.shape[3]) / 4 * lynx_ref_latent.shape[1]),
+                        freqs=freqs,  # WNE fix: same as the cond buffer above — forward RoPE freqs.
                         lynx_embeds=lynx_embeds,
                         is_uncond=True
                     )
