@@ -106,6 +106,38 @@ def _ffmpeg_thumb(path: str, t: float, height: int) -> bytes:
     return out.stdout or b""
 
 
+def _ffmpeg_thumbs_batch(path: str, count: int, height: int, dur: float) -> list:
+    """Extract `count` evenly-spaced thumbnails in ONE ffmpeg pass.
+
+    Was 8 separate ffmpeg spawns (one fast-seek each) — on Windows the process
+    spawn overhead made 'add to scene' take tens of seconds. A single decode
+    pass with the fps filter is an order of magnitude faster for normal clips.
+    """
+    import glob
+    import shutil
+    import tempfile
+    tmpd = tempfile.mkdtemp(prefix="wne_thumbs_")
+    try:
+        if dur and dur > 0:
+            vf = f"fps={count}/{dur:.4f},scale=-2:{int(height)}:flags=area"
+        else:
+            vf = f"scale=-2:{int(height)}:flags=area"
+        cmd = ["ffmpeg", "-v", "error", "-i", path, "-vf", vf,
+               "-frames:v", str(int(count)), "-q:v", "5",
+               os.path.join(tmpd, "t_%03d.jpg")]
+        subprocess.run(cmd, capture_output=True, timeout=90)
+        thumbs = []
+        for f in sorted(glob.glob(os.path.join(tmpd, "t_*.jpg")))[:count]:
+            try:
+                with open(f, "rb") as fh:
+                    thumbs.append(_b64(fh.read()))
+            except Exception:  # noqa: BLE001
+                pass
+        return thumbs
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+
 def _exr_view_bytes(path: str, height: int, transform: str, exposure: float) -> bytes:
     """Decode a single EXR/HDR/DPX image via OpenCV and tone-map to a JPEG."""
     import cv2          # type: ignore
@@ -133,7 +165,60 @@ def _b64(jpeg: bytes) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
 
 
-def _probe_blocking(path: str, count: int, height: int, transform: str, exposure: float) -> dict:
+def _ffmpeg_audio_peaks(path: str, buckets: int = 256) -> tuple:
+    """Decode a clip's audio to low-rate mono PCM and reduce to `buckets`
+    normalized peaks, entirely server-side. Cheap: mono f32 @ 4 kHz is ~16 KB
+    per second, no VRAM. Returns (peaks:list[float], has_audio:bool, dur_sec).
+
+    This is why the waveform is now reliable: the browser's Web-Audio decode
+    fails silently on many codecs/containers (the reported 'audio didn't appear
+    as waveform'); ffmpeg decodes essentially everything.
+    """
+    # Is there even an audio stream? (fast, no decode)
+    adur = 0.0
+    try:
+        pr = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_type,duration",
+             "-show_entries", "format=duration", "-of", "json", path],
+            capture_output=True, text=True, timeout=20)
+        pj = json.loads(pr.stdout or "{}")
+        streams = pj.get("streams") or []
+        if not streams:
+            return [], False, 0.0
+        for v in (streams[0].get("duration"), (pj.get("format") or {}).get("duration")):
+            try:
+                adur = float(v)
+                if adur > 0:
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+    except Exception:  # noqa: BLE001
+        return [], False, 0.0
+    # Decode mono f32 PCM at a low rate and bucket into peaks.
+    try:
+        import numpy as np  # type: ignore
+        out = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", path, "-ac", "1", "-ar", "4000",
+             "-f", "f32le", "pipe:1"], capture_output=True, timeout=90)
+        raw = out.stdout or b""
+        if not raw:
+            return [], False, adur
+        samples = np.frombuffer(raw, dtype=np.float32)
+        if samples.size == 0:
+            return [], False, adur
+        n = max(16, int(buckets))
+        edges = np.linspace(0, samples.size, n + 1).astype(int)
+        peaks = [float(np.abs(samples[edges[i]:edges[i + 1]]).max())
+                 if edges[i + 1] > edges[i] else 0.0 for i in range(n)]
+        mx = max(peaks) or 1.0
+        return [round(p / mx, 4) for p in peaks], True, adur
+    except Exception:  # noqa: BLE001
+        return [], False, adur
+
+
+def _probe_blocking(path: str, count: int, height: int, transform: str, exposure: float,
+                    want_audio: bool = False) -> dict:
     lower = path.lower()
 
     # ── EXR / image sequence folder ──────────────────────────────────────
@@ -191,13 +276,11 @@ def _probe_blocking(path: str, count: int, height: int, transform: str, exposure
     # ── everything else: ffmpeg (video / ProRes / DNxHD / MXF / DCP / 4K) ─
     meta = _ffprobe_meta(path)
     dur = meta["durationSec"]
-    thumbs = []
-    if dur and dur > 0:
-        times = [dur * (k + 0.5) / count for k in range(count)]
-    else:
-        times = [0.0]                                   # single-frame fallback
-    for t in times:
-        jpeg = _ffmpeg_thumb(path, t, height)
+    # ONE ffmpeg pass for all thumbnails (fast). Fall back to a single fast-seek
+    # frame if the batch pass produced nothing (e.g. odd container).
+    thumbs = _ffmpeg_thumbs_batch(path, count, height, dur)
+    if not thumbs:
+        jpeg = _ffmpeg_thumb(path, (dur * 0.5) if dur else 0.0, height)
         if jpeg:
             thumbs.append(_b64(jpeg))
     if not thumbs:                                       # last-ditch: cv2 first frame
@@ -213,7 +296,14 @@ def _probe_blocking(path: str, count: int, height: int, transform: str, exposure
                     thumbs.append(_b64(buf.tobytes()))
         except Exception:  # noqa: BLE001
             pass
-    return {"ok": bool(thumbs), "kind": "video", **meta, "thumbs": thumbs}
+    result = {"ok": bool(thumbs), "kind": "video", **meta, "thumbs": thumbs}
+    # Server-side audio peaks (reliable waveform for the AUDIO track, any codec).
+    if want_audio:
+        peaks, has_audio, adur = _ffmpeg_audio_peaks(path)
+        result["audioPeaks"] = peaks
+        result["hasAudio"] = has_audio
+        result["audioDurationSec"] = adur
+    return result
 
 
 def _register_route():
@@ -238,12 +328,13 @@ def _register_route():
             height = max(24, min(240, int(q.get("height", "80"))))
             transform = q.get("exr_view", "sRGB")
             exposure = float(q.get("exposure", "0") or 0)
+            want_audio = q.get("audio", "0") in ("1", "true", "yes")
         except Exception:  # noqa: BLE001
-            count, height, transform, exposure = 8, 80, "sRGB", 0.0
+            count, height, transform, exposure, want_audio = 8, 80, "sRGB", 0.0, False
         try:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
-                None, _probe_blocking, path, count, height, transform, exposure)
+                None, _probe_blocking, path, count, height, transform, exposure, want_audio)
             return web.json_response(result)
         except Exception as exc:  # noqa: BLE001
             log.warning("[WanNodeExperiments] media_probe failed for %s: %s", name, exc)
