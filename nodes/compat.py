@@ -118,7 +118,16 @@ def set_transformer_option(m, key, value) -> None:
 
 
 def set_post_cfg(m, fn) -> bool:
-    """Attach a sampler ``post_cfg`` function (native API). Returns success."""
+    """Attach a sampler ``post_cfg`` function (native API). Returns success.
+
+    Kijai's ``WANVIDEOMODEL`` inherits ``set_model_sampler_post_cfg_function``
+    from ``ModelPatcher`` but his sampler never calls it, so a plain ``hasattr``
+    check reports a false success and the caller's Kijai fallback (which maps the
+    effect onto ``transformer_options``) never runs. Gate on ``detect_model`` so
+    only genuine native models take the hook; Kijai models return False.
+    """
+    if detect_model(m) == "wanvideo":
+        return False
     if hasattr(m, "set_model_sampler_post_cfg_function"):
         m.set_model_sampler_post_cfg_function(fn)
         return True
@@ -126,7 +135,13 @@ def set_post_cfg(m, fn) -> bool:
 
 
 def set_unet_wrapper(m, fn) -> bool:
-    """Attach a unet function wrapper (native API). Returns success."""
+    """Attach a unet function wrapper (native API). Returns success.
+
+    Same false-success caveat as ``set_post_cfg`` on Kijai's WANVIDEOMODEL — gate
+    on ``detect_model`` so the Kijai fallback stays reachable.
+    """
+    if detect_model(m) == "wanvideo":
+        return False
     if hasattr(m, "set_model_unet_function_wrapper"):
         m.set_model_unet_function_wrapper(fn)
         return True
@@ -225,8 +240,25 @@ def _install_patch() -> bool:
         return False
     _orig_optimized_attention = _attention_mod.optimized_attention
     _attention_mod.optimized_attention = _wrapped_optimized_attention
+    # DiT modules bind the symbol at import time (`from ...attention import
+    # optimized_attention`), so patching only the source module is dead for
+    # them — e.g. comfy.ldm.wan.model holds its own reference. Rebind every
+    # already-imported module whose `optimized_attention` is still the original
+    # so the interceptor actually reaches Wan's attention. (Modules imported
+    # AFTER this runs pick up the wrapper automatically.)
+    import sys
+    rebound = 0
+    for _mod in list(sys.modules.values()):
+        if _mod is None or _mod is _attention_mod:
+            continue
+        try:
+            if getattr(_mod, "optimized_attention", None) is _orig_optimized_attention:
+                setattr(_mod, "optimized_attention", _wrapped_optimized_attention)
+                rebound += 1
+        except Exception:  # noqa: BLE001
+            continue
     _patched = True
-    log.info("[WanNodeExperiments] attention interception installed")
+    log.info("[WanNodeExperiments] attention interception installed (+%d consumer modules rebound)", rebound)
     return True
 
 

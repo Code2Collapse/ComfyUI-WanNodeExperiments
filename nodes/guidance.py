@@ -142,7 +142,11 @@ class APGGuidance:
 
                 par, orth = _project(guidance, cond)
                 modified = orth + parallel_weight * par
-                return uncond + scale * modified
+                # Anchor at the conditional prediction with (scale-1), matching
+                # APG (Sadat 2410.02416) and comfy_extras/nodes_apg.py. Anchoring
+                # at uncond with `scale` double-counts once the guidance has been
+                # projected/norm-clamped (at scale=1 it must reduce to `cond`).
+                return cond + (scale - 1.0) * modified
 
             if not compat.set_post_cfg(m, post_cfg):
                 _warn_kijai("APGGuidance")
@@ -695,10 +699,11 @@ class CFGZeroStar:
 class TangentialDampingCFG:
     """Tangential-Damping CFG (TCFG family, arXiv:2503.18137).
 
-    Damps the component of the unconditional prediction that lies *parallel* to
-    the conditional one (the part that directly fights the prompt), keeping the
-    orthogonal/tangential component. ``damping`` = how much of the parallel part
-    to remove (1.0 = full tangential).
+    Damps the *tangential* (orthogonal) component of the unconditional
+    prediction — the part misaligned with the conditional one, which injects
+    off-prompt artifacts — while keeping the aligned (parallel) component. At
+    ``damping``=1 the negative branch collapses onto its projection onto cond.
+    ``damping`` = how much of the tangential part to remove.
 
     Credits: refined from Kijai's ``use_tcfg`` (tangential CFG) option.
     """
@@ -726,8 +731,8 @@ class TangentialDampingCFG:
                 cond = args["cond_denoised"]
                 uncond = args["uncond_denoised"]
                 scale = args["cond_scale"]
-                par, _orth = _project(uncond, cond)  # uncond's component parallel to cond
-                uncond_damped = uncond - damping * par
+                _par, orth = _project(uncond, cond)  # orth = uncond's tangential (off-cond) part
+                uncond_damped = uncond - damping * orth
                 return uncond_damped + scale * (cond - uncond_damped)
 
             if not compat.set_post_cfg(m, post_cfg):
