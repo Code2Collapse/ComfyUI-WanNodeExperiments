@@ -1,235 +1,143 @@
-import torch
-from PIL import Image
-from comfy.cli_args import args, LatentPreviewMethod
-from comfy.taesd.taesd import TAESD
-import comfy.model_management
-import folder_paths
-import comfy.utils
-from comfy.latent_formats import Wan21, Wan22
-from .utils import log
-import struct
+"""Custom latent preview for WanNodeExperiments samplers.
 
-from .taehv import TAEHV
+WHY THIS EXISTS — WanNodeExperiments' samplers import this module via
+``from .latent_preview import prepare_callback`` instead of ComfyUI's
+native ``latent_preview``. The previous version was a wholesale copy of
+ComfyUI's latent_preview with a VHS-style animated overlay bolted on, and
+it had four real defects:
 
-MAX_PREVIEW_RESOLUTION = args.preview_size
+  1. ``print("latent_image shape: ", ...)`` ran on EVERY preview frame
+     (console spam + latency).
+  2. ``serv = server.PromptServer.instance`` executed at MODULE IMPORT
+     time — crashes on Linux and whenever the server isn't ready yet
+     (the "[fc3d_preview] PromptServer.instance not ready" warning).
+  3. ``Thread(target=...).run()`` ran the preview thread SYNCHRONOUSLY,
+     blocking the sampler callback instead of running it async.
+  4. ``decode_latent_to_preview_image`` returned ``None`` always, so the
+     native in-node preview got NOTHING unless the VHS frontend JS was
+     loaded — i.e. the preview was invisible without VideoHelperSuite.
 
-def preview_to_image(latent_image):
-        print("latent_image shape: ", latent_image.shape)#torch.Size([60, 104, 3])
-        latents_ubyte = (((latent_image + 1.0) / 2.0).clamp(0, 1)  # change scale from -1..1 to 0..1
-                            .mul(0xFF)  # to 0..255
-                            )
-        if comfy.model_management.directml_enabled:
-                latents_ubyte = latents_ubyte.to(dtype=torch.uint8)
-        latents_ubyte = latents_ubyte.to(device="cpu", dtype=torch.uint8, non_blocking=comfy.model_management.device_supports_non_blocking(latent_image.device))
+THE FIX — delegate the actual decode to ComfyUI's NATIVE
+``latent_preview.prepare_callback``, which the C2C preview guard
+(``_c2c_preview_guard.py``) patches with:
+  - smart-Auto per-model previewer selection (TAESD for Wan/Hunyuan/LTX
+    video, TAESD-for-images when a decoder file is present, else
+    Latent2RGB, never blank),
+  - a 24fps throttle (decode at most 24x/sec instead of every step —
+    the "faster (24fps)" the user asked for).
 
-        return Image.fromarray(latents_ubyte.numpy())
+So this module is now a thin, robust pass-through. The native in-node
+preview works WITHOUT VHS installed, on Linux and Windows, for every
+WanNodeExperiments sampler that imports this. The optional VHS animated
+overlay is preserved as an enhancement that activates only when VHS is
+actually present (so users who rely on it don't lose it), and it never
+blocks the sampler or crashes on import.
+"""
+from __future__ import annotations
 
-class LatentPreviewer:
-    def decode_latent_to_preview(self, x0):
-        pass
+import logging
+import time
+from importlib.util import find_spec
 
-    def decode_latent_to_preview_image(self, preview_format, x0):
-        preview_image = self.decode_latent_to_preview(x0)
-        return ("JPEG", preview_image, MAX_PREVIEW_RESOLUTION)
+log = logging.getLogger("wanexp.preview")
 
-class TAESDPreviewerImpl(LatentPreviewer):
-    def __init__(self, taesd):
-        self.taesd = taesd
-
-    # def decode_latent_to_preview(self, x0):
-    #     #x_sample = self.taesd.decode(x0[:1])[0].movedim(0, 2)
-    #     print("x0 shape: ", x0.shape) #torch.Size([5, 16, 60, 104])
-    #     x0 = x0.unsqueeze(0)
-    #     print("x0 shape: ", x0.shape) #torch.Size([5, 16, 60, 104])
-    #     x_sample = self.taesd.decode_video(x0, parallel=False)[0].permute(0, 2, 3, 1)[0]
-    #     print("x_sample shape: ", x_sample.shape) 
-    #     return preview_to_image(x_sample)
-
-
-class Latent2RGBPreviewer(LatentPreviewer):
-    def __init__(self, latent_rgb_factors, latent_rgb_factors_bias=None):
-        self.latent_rgb_factors = torch.tensor(latent_rgb_factors, device="cpu").transpose(0, 1)
-        self.latent_rgb_factors_bias = None
-        if latent_rgb_factors_bias is not None:
-            self.latent_rgb_factors_bias = torch.tensor(latent_rgb_factors_bias, device="cpu")
-
-    def decode_latent_to_preview(self, x0):
-        self.latent_rgb_factors = self.latent_rgb_factors.to(dtype=x0.dtype, device=x0.device)
-        if self.latent_rgb_factors_bias is not None:
-            self.latent_rgb_factors_bias = self.latent_rgb_factors_bias.to(dtype=x0.dtype, device=x0.device)
-
-        if x0.ndim == 5:
-            x0 = x0[0, :, 0]
-        else:
-            x0 = x0[0]
-
-        latent_image = torch.nn.functional.linear(x0.movedim(0, -1), self.latent_rgb_factors, bias=self.latent_rgb_factors_bias)
-        # latent_image = x0[0].permute(1, 2, 0) @ self.latent_rgb_factors
-
-        return preview_to_image(latent_image)
+# 24fps for the optional VHS overlay (matches the guard's throttle).
+_PREVIEW_FPS = 24
 
 
-def get_previewer(device, latent_format):
-    previewer = None
-    method = args.preview_method
-    if method != LatentPreviewMethod.NoPreviews:
-        if method == LatentPreviewMethod.Auto:
-            method = LatentPreviewMethod.Latent2RGB
+def _server():
+    """Lazy PromptServer.instance — NEVER at import time (that was the
+    Linux crash). Returns None if the server isn't ready yet."""
+    try:
+        import server
+        inst = getattr(server, "PromptServer", None)
+        return inst.instance if inst is not None else None
+    except Exception:
+        return None
 
-        if method == LatentPreviewMethod.TAESD:
-            try:
-                if latent_format == Wan22:
-                    taehv_path = folder_paths.get_full_path("vae_approx", "taew2_2.safetensors")
-                else:
-                    taehv_path = folder_paths.get_full_path("vae_approx", "taew2_1.safetensors")
-                taesd = TAEHV(comfy.utils.load_torch_file(taehv_path)).to(device)
-                previewer = TAESDPreviewerImpl(taesd)
-                previewer = WrappedPreviewer(previewer, rate=16)
-            except Exception:
-                log.info("Could not find TAEW model file 'taew2_1.safetensors' from models/vae_approx. You can download it from https://huggingface.co/Kijai/WanVideo_comfy/blob/main/taew2_1.safetensors")
-                log.info("Using Latent2RGB previewer instead.")
-                method = LatentPreviewMethod.Latent2RGB
-                
-        if previewer is None:
-            if latent_format.latent_rgb_factors is not None:
-                previewer = Latent2RGBPreviewer(latent_format.latent_rgb_factors, latent_format.latent_rgb_factors_bias)
-                previewer = WrappedPreviewer(previewer, rate=4)
-    return previewer
+
+def _vhs_present():
+    """True iff ComfyUI-VideoHelperSuite (the VHS animated-preview frontend)
+    is installed. Only then is the overlay worth sending."""
+    return find_spec("videohelpersuite") is not None
+
 
 def prepare_callback(model, steps, x0_output_dict=None):
-    preview_format = "JPEG"
-    if preview_format not in ["JPEG", "PNG"]:
-        preview_format = "JPEG"
+    """Drop-in replacement for latent_preview.prepare_callback.
 
-    previewer = get_previewer(model.load_device, model.model.latent_format)
-
-    if steps is not None:
-        pbar = comfy.utils.ProgressBar(steps)
-    def callback(step, x0, x, total_steps):
-        if x0_output_dict is not None:
-            x0_output_dict["x0"] = x0
-
-        preview_bytes = None
-        if previewer:
-            preview_bytes = previewer.decode_latent_to_preview_image(preview_format, x0)
-        if step is not None:
-            pbar.update_absolute(step + 1, total_steps, preview_bytes)
-    return callback
-
-#borrowed VideoHelperSuite https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/blob/main/videohelpersuite/latent_preview.py
-import server
-from threading import Thread
-import torch.nn.functional as F
-import io
-import time
-import struct
-from importlib.util import find_spec
-serv = server.PromptServer.instance
-
-class WrappedPreviewer(LatentPreviewer):
-    def __init__(self, previewer, rate=16):
-        self.first_preview = True
-        self.last_time = 0
-        self.c_index = 0
-        self.rate = rate
-        self.swarmui_env = find_spec("SwarmComfyCommon") is not None
-        if self.swarmui_env:
-            print("previewer: SwarmUI output enabled")
-        if hasattr(previewer, 'taesd'):
-            self.taesd = previewer.taesd
-        elif hasattr(previewer, 'latent_rgb_factors'):
-            self.latent_rgb_factors = previewer.latent_rgb_factors
-            self.latent_rgb_factors_bias = previewer.latent_rgb_factors_bias
-        else:
-            raise Exception('Unsupported preview type for VHS animated previews')
-
-    def decode_latent_to_preview_image(self, preview_format, x0):
-        if x0.ndim == 5:
-            #Keep batch major
-            x0 = x0.movedim(2,1)
-            x0 = x0.reshape((-1,)+x0.shape[-3:])
-        num_images = x0.size(0)
-        new_time = time.time()
-        num_previews = int((new_time - self.last_time) * self.rate)
-        self.last_time = self.last_time + num_previews/self.rate
-        if num_previews > num_images:
-            num_previews = num_images
-        elif num_previews <= 0:
-            return None
-        if self.first_preview:
-            self.first_preview = False
-            serv.send_sync('VHS_latentpreview', {'length':num_images, 'rate': self.rate, 'id': serv.last_node_id})
-            self.last_time = new_time + 1/self.rate
-        if self.c_index + num_previews > num_images:
-            x0 = x0.roll(-self.c_index, 0)[:num_previews]
-        else:
-            x0 = x0[self.c_index:self.c_index + num_previews]
-        Thread(target=self.process_previews, args=(x0, self.c_index,
-                                                   num_images)).run()
-        self.c_index = (self.c_index + num_previews) % num_images
+    Delegates the decode to the (guard-patched) native prepare_callback —
+    so the previewer is the smart-Auto per-model one and the 24fps throttle
+    the guard installs — then, IF VHS is installed, adds the animated
+    scrolling-frame overlay on top. The native in-node preview works
+    either way; the overlay is pure upside for VHS users.
+    """
+    import latent_preview as _native  # guard-patched: smart-Auto + 24fps
+    native_cb = _native.prepare_callback(model, steps, x0_output_dict)
+    if native_cb is None:
         return None
-    def process_previews(self, image_tensor, ind, leng):
-        max_size = 256
-        image_tensor = self.decode_latent_to_preview(image_tensor)
-        if image_tensor.size(1) > max_size or image_tensor.size(2) > max_size:
-            image_tensor = image_tensor.movedim(-1,0)
-            if image_tensor.size(2) < image_tensor.size(3):
-                height = (max_size * image_tensor.size(2)) // image_tensor.size(3)
-                image_tensor = F.interpolate(image_tensor, (height,max_size), mode='bilinear')
-            else:
-                width = (max_size * image_tensor.size(3)) // image_tensor.size(2)
-                image_tensor = F.interpolate(image_tensor, (max_size, width), mode='bilinear')
-            image_tensor = image_tensor.movedim(0,-1)
-        previews_ubyte = (image_tensor.clamp(0, 1)
-                         .mul(0xFF)  # to 0..255
-                         ).to(device="cpu", dtype=torch.uint8)
 
-        # Send VHS preview
-        for preview in previews_ubyte:
-            i = Image.fromarray(preview.numpy())
-            message = io.BytesIO()
-            message.write((1).to_bytes(length=4, byteorder='big')*2)
-            message.write(ind.to_bytes(length=4, byteorder='big'))
-            message.write(struct.pack('16p', serv.last_node_id.encode('ascii')))
-            i.save(message, format="JPEG", quality=95, compress_level=1)
-            #NOTE: send sync already uses call_soon_threadsafe
-            serv.send_sync(server.BinaryEventTypes.PREVIEW_IMAGE,
+    serv = _server()
+    if not (_vhs_present() and serv is not None):
+        # No VHS overlay to add — native in-node preview is enough.
+        return native_cb
+
+    # VHS animated overlay: stream individual decoded frames over the
+    # websocket as a scrolling preview, throttled to 24fps. We wrap the
+    # native callback so the native in-node preview STILL gets its
+    # preview_bytes on every (throttled) decode, and additionally emit
+    # VHS frames. The overlay never blocks: it runs in a daemon thread.
+    import io as _io
+    import struct
+    import threading
+    from PIL import Image
+
+    state = {"last": 0.0, "first": True, "n": 0}
+
+    def _emit_vhs(x0, node_id):
+        """Decode one small frame and send it as a VHS preview frame."""
+        try:
+            import latent_preview as _lp
+            previewer = _lp.get_previewer(x0.device, model.model.latent_format)
+            if previewer is None:
+                return
+            res = previewer.decode_latent_to_preview_image("JPEG", x0)
+            if not res:
+                return
+            _fmt, img_or_bytes, _max = res
+            # res may be ("JPEG", pil_image, max) from native or
+            # ("JPEG", bytes, max) from the guard's safety net.
+            if isinstance(img_or_bytes, (bytes, bytearray)):
+                buf = _io.BytesIO(img_or_bytes)
+                img = Image.open(buf)
+            else:
+                img = img_or_bytes
+            message = _io.BytesIO()
+            message.write((1).to_bytes(length=4, byteorder="big") * 2)
+            message.write(state["n"].to_bytes(length=4, byteorder="big"))
+            try:
+                message.write(struct.pack("16p", (node_id or "").encode("ascii")))
+            except Exception:
+                pass
+            img.save(message, format="JPEG", quality=92, compress_level=1)
+            serv.send_sync(_lp.server.BinaryEventTypes.PREVIEW_IMAGE
+                           if hasattr(_lp, "server") else 1,
                            message.getvalue(), serv.client_id)
-            if self.rate == 16:
-                ind = (ind + 1) % ((leng-1) * 4 - 1)
-            else:
-                ind = (ind + 1) % leng
+            state["n"] = state["n"] + 1
+        except Exception as exc:  # noqa: BLE001 — overlay must never break sampling
+            log.debug("[wanexp.preview] VHS overlay frame skipped: %s", exc)
 
-        # Send SwarmUI preview if detected
-        if self.swarmui_env:
-            images = [Image.fromarray(preview.numpy()) for preview in previews_ubyte]
-            message = io.BytesIO()
-            header = struct.pack(">I", 3)
-            message.write(header)
-            images[0].save(
-                message,
-                save_all=True,
-                duration=int(1000.0/self.rate),
-                append_images=images[1 : len(images)],
-                lossless=False,
-                quality=80,
-                method=0,
-                format="WEBP",
-            )
-            message.seek(0)
-            preview_bytes = message.getvalue()
-            serv.send_sync(1, preview_bytes, sid=serv.client_id)
-    def decode_latent_to_preview(self, x0):
-        if hasattr(self, 'taesd'):
-            x0 = x0.unsqueeze(0)
-            x_sample = self.taesd.decode_video(x0, parallel=False, show_progress_bar=False)[0].permute(0, 2, 3, 1)
-            return x_sample
-        else:
-            self.latent_rgb_factors = self.latent_rgb_factors.to(dtype=x0.dtype, device=x0.device)
-            if self.latent_rgb_factors_bias is not None:
-                self.latent_rgb_factors_bias = self.latent_rgb_factors_bias.to(dtype=x0.dtype, device=x0.device)
-            latent_image = F.linear(x0.movedim(1, -1), self.latent_rgb_factors,
-                                    bias=self.latent_rgb_factors_bias)
-            latent_image = (latent_image + 1.0) / 2.0
-            return latent_image 
-        
+    def callback(step, x0, x, total_steps):
+        # Native first: updates the in-node preview + progress bar (this
+        # is the decode the guard throttles to 24fps).
+        native_cb(step, x0, x, total_steps)
+        # VHS overlay: independent 24fps throttle so it never spams.
+        now = time.monotonic()
+        if now - state["last"] < (1.0 / _PREVIEW_FPS) and not state["first"]:
+            return
+        state["last"] = now
+        state["first"] = False
+        node_id = getattr(serv, "last_node_id", "") or ""
+        threading.Thread(target=_emit_vhs, args=(x0, node_id),
+                          daemon=True).start()
+
+    return callback
