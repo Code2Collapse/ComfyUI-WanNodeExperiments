@@ -126,6 +126,30 @@ except Exception as _t5g_exc:  # noqa: BLE001
 # Linux box without a separate install). Registered under a "WNE_" prefix so it can
 # never collide with a separately-installed WanVideoWrapper, and fully guarded so a
 # load failure here cannot take down the rest of the pack (per the import-cascade rule).
+def _label_vendored(cls, origin: str):
+    """Give a vendored node a description, where upstream left it blank.
+
+    98 of the re-registered nodes carry no DESCRIPTION, so they show a blank
+    tooltip in the menu - the one place someone looks before wiring one up.
+
+    What is NOT done here: inventing a description of what each node does.
+    That would mean asserting behaviour nobody verified, on someone else's
+    code, in a pack where a wrong claim is worse than no claim. Provenance is
+    true, useful, and does not pretend to knowledge this pack does not have.
+    """
+    try:
+        if (getattr(cls, "DESCRIPTION", "") or "").strip():
+            return
+        cls.DESCRIPTION = (
+            f"Vendored from {origin}, re-registered here so this pack is "
+            "self-contained. Upstream ships no description for this node - see "
+            f"the {origin} documentation for what it does. It is prefixed and "
+            "namespaced so it cannot collide with a separately installed copy."
+        )
+    except Exception:  # noqa: BLE001 - a read-only class must not break loading
+        pass
+
+
 _wvw_upstream = _upstream_present("ComfyUI-WanVideoWrapper")
 if _wvw_upstream:
     log.info("[WanNodeExperiments] upstream %s already installed — skipping our vendored "
@@ -139,6 +163,7 @@ else:
         for _k, _v in _wvw_map.items():
             _pk = "WNE_" + _k
             if _pk not in NODE_CLASS_MAPPINGS:
+                _label_vendored(_v, "Kijai's ComfyUI-WanVideoWrapper")
                 NODE_CLASS_MAPPINGS[_pk] = _v
                 NODE_DISPLAY_NAME_MAPPINGS[_pk] = str(_wvw_disp.get(_k, _k)) + " (WNE)"
                 _added += 1
@@ -171,6 +196,7 @@ else:
         for _k, _v in _wap_map.items():
             _pk = "WNE_AP_" + _k
             if _pk not in NODE_CLASS_MAPPINGS:
+                _label_vendored(_v, "wuwukaka's ComfyUI-WanAnimatePlus")
                 NODE_CLASS_MAPPINGS[_pk] = _v
                 NODE_DISPLAY_NAME_MAPPINGS[_pk] = str(_wap_disp.get(_k, _k)) + " (WNE)"
                 _ap_added += 1
