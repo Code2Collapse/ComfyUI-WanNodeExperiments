@@ -1162,6 +1162,12 @@ Encode video frames to a Wan latent (tiled, V2V/I2V).
 | `tile_size` | `INT` | default `0`, range 0…4096, step 64 | 0 = no spatial tiling. |
 | `overlap` | `INT` | default `64`, range 0…512, step 16 | — |
 
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `frames` | choice: `as core`, `pad to 4n+1` | default `"as core"` | The Wan VAE keeps 4n+1 frames and silently drops the rest (10, 11 or 12 frames in -> 9 out). as core: unchanged behaviour, with a warning naming the frames dropped. pad to 4n+1: repeat the last frame up to the next 4n+1; WNE Wan VAE Decode (tiled) and C2C VAE Quality Decode trim the result back to the source length. Core VAE Decode does not know the padding and keeps the extra frames. |
+
 **Outputs**
 
 | # | Name | Type | What it is |

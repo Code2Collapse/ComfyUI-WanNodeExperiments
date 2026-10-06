@@ -49,6 +49,54 @@ def _as_nhwc(img):
         return img
     if img.dim() == 3:
         return img.unsqueeze(0)
+    if img.dim() == 5:
+        # A video VAE decodes to [B,T,H,W,C]; IMAGE is frames-as-batch, as core VAEDecode reshapes it.
+        return img.reshape(-1, *img.shape[-3:])
+    return img
+
+
+# A causal video VAE keeps 1 + k*f frames (f = its temporal factor, 4 for Wan) and drops the rest without a
+# message (core comfy/ldm/wan/vae.py: "t = 1 + ((t - 1) // 4) * 4"). Measured on Wan 2.1: 10, 11 and 12 frames
+# in -> 9 out (docs/research/precision_loss.md M4). WNE_WanVAEEncode can pad instead; the latent then carries
+# c2c_source_frames so WNE_WanVAEDecodeTiled and CNP C2CVAEQualityDecode trim back to the source length.
+FRAME_MODES = ("as core", "pad to 4n+1")       # short: a long combo value clips the "frames" label
+SOURCE_FRAMES_KEY = "c2c_source_frames"
+
+
+def _temporal_factor(vae):
+    try:
+        f = vae.temporal_compression_decode()
+    except Exception:  # noqa: BLE001 - image VAEs have no temporal factor
+        return None
+    return f if isinstance(f, int) and f > 1 else None
+
+
+def _fit_frames(pixels, vae, mode):
+    """Return (pixels, source_frames or None) for the encoder's 1 + k*f frame rule."""
+    n = int(pixels.shape[0])
+    f = _temporal_factor(vae)
+    if f is None or n < 1:
+        return pixels, None
+    keep = 1 + ((n - 1) // f) * f
+    if keep == n:
+        return pixels, None
+    if str(mode).startswith("pad"):
+        target = keep + f
+        pad = pixels[-1:].expand(target - n, *pixels.shape[1:])
+        log.info("[WanNodeExperiments] %d frames padded to %d (last frame repeated); decode trims back to %d",
+                 n, target, n)
+        return torch.cat([pixels, pad], dim=0), n
+    log.warning("[WanNodeExperiments] this VAE keeps 1+%dk frames: the encoder will drop the last %d of %d frames. "
+                "Set frames to 'pad to 4n+1' on WNE_WanVAEEncode to keep them.", f, n - keep, n)
+    return pixels, None
+
+
+def _trim_to_source(img, samples):
+    """Cut padded frames back off when the latent says how long the source was (single-clip latents only)."""
+    src = samples.get(SOURCE_FRAMES_KEY) if isinstance(samples, dict) else None
+    s = samples.get("samples") if isinstance(samples, dict) else None
+    if isinstance(src, int) and src > 0 and s is not None and s.shape[0] == 1 and img.shape[0] > src:
+        return img[:src]
     return img
 
 
@@ -511,12 +559,12 @@ class WanVAEDecodeTiled:
                         s, tile_x=tile_size or 512, tile_y=tile_size or 512,
                         overlap=overlap, tile_t=temporal_tile, overlap_t=temporal_overlap)
                     _clean_vram()
-                    return (_as_nhwc(img),)
+                    return (_trim_to_source(_as_nhwc(img), samples),)
                 except TypeError:
                     log.info("[WanNodeExperiments] VAE has no temporal-tile params; spatial only")
                 except Exception as exc:  # noqa: BLE001
                     log.warning("[WanNodeExperiments] temporal tiled decode failed (%s)", exc)
-            img = _as_nhwc(_vae_decode(vae, s, tile_size=tile_size, overlap=overlap))
+            img = _trim_to_source(_as_nhwc(_vae_decode(vae, s, tile_size=tile_size, overlap=overlap)), samples)
             _clean_vram()
             return (img,)
         except Exception as exc:  # noqa: BLE001
@@ -546,6 +594,15 @@ class WanVAEEncode:
                                       "tooltip": "0 = no spatial tiling."}),
                 "overlap": ("INT", {"default": 64, "min": 0, "max": 512, "step": 16}),
             },
+            "optional": {
+                "frames": (list(FRAME_MODES), {
+                    "default": FRAME_MODES[0],
+                    "tooltip": "The Wan VAE keeps 4n+1 frames and silently drops the rest (10, 11 or 12 frames "
+                               "in -> 9 out).\nas core: unchanged behaviour, with a warning naming the frames "
+                               "dropped.\npad to 4n+1: repeat the last frame up to the next 4n+1; WNE Wan VAE "
+                               "Decode (tiled) and C2C VAE Quality Decode trim the result back to the source "
+                               "length. Core VAE Decode does not know the padding and keeps the extra frames."}),
+            },
         }
 
     RETURN_TYPES = ("LATENT",)
@@ -554,19 +611,23 @@ class WanVAEEncode:
     CATEGORY = CAT_VAE
     DESCRIPTION = "Encode video frames to a Wan latent (tiled, V2V/I2V)."
 
-    def encode(self, pixels, vae, tile_size, overlap):
+    def encode(self, pixels, vae, tile_size, overlap, frames=FRAME_MODES[0]):
         try:
+            pixels, source_frames = _fit_frames(pixels, vae, frames)
             latent = _vae_encode(vae, pixels, tile_size=tile_size, overlap=overlap)
             _clean_vram()
-            return ({"samples": latent},)
+            out = {"samples": latent}
+            if source_frames is not None:
+                out[SOURCE_FRAMES_KEY] = source_frames
+            return (out,)
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(humanise(exc)) from exc
 
     @classmethod
-    def IS_CHANGED(cls, pixels, vae, tile_size, overlap):
+    def IS_CHANGED(cls, pixels, vae, tile_size, overlap, frames=FRAME_MODES[0]):
         import hashlib
         h = hashlib.md5(pixels.detach().cpu().numpy().tobytes()).hexdigest()
-        return f"wvaeenc-{tile_size}-{overlap}-{h}"
+        return f"wvaeenc-{tile_size}-{overlap}-{frames}-{h}"
 
 
 NODE_CLASS_MAPPINGS = {
