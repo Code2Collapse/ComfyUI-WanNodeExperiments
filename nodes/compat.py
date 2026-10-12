@@ -68,6 +68,18 @@ def humanise(raw) -> str:
         if re.search(pattern, text, re.IGNORECASE):
             return msg
     first = next((ln for ln in text.split("\n") if ln.strip() and not ln.startswith(" ")), "")
+    if not (first or text.strip()):
+        # L7.87 (2026-10-12): an exception without a message (a bare assert, KeyError(), ...) became just "Error: "
+        # and the loaders failed with nothing to go on - name the exception and the line it came from.
+        if not isinstance(raw, BaseException):
+            return "Something went wrong."
+        tb = raw.__traceback__
+        while tb is not None and tb.tb_next is not None:
+            tb = tb.tb_next
+        import os
+
+        where = f" in {os.path.basename(tb.tb_frame.f_code.co_filename)}:{tb.tb_lineno}" if tb is not None else ""
+        return f"Error: {type(raw).__name__}{where} (no message)"
     return "Error: " + (first or text[:120])
 
 

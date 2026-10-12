@@ -89,7 +89,9 @@ def _resolve_path(name):
 
     if os.path.exists(name):
         return name
-    raise FileNotFoundError(name)
+    # L7.87: FileNotFoundError(name) alone read "Error: " when the name was empty, and never said where we looked
+    raise FileNotFoundError(f"Wan model {name!r} is not in models/diffusion_models, models/unet or models/unet_gguf "
+                            "(nor an existing path). Pick a file from the list or copy it there.")
 
 
 def _clean_vram():
