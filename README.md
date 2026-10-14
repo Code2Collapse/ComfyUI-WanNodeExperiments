@@ -56,7 +56,7 @@ occlusion, FlowVid/FRESCO-style deflicker) for editing *existing* video rather
 than generating from scratch.
 
 ### `WanNodeExperiments/Audio`, `/LipSync`
-Audio separation and lip-sync driving (InfiniteTalk-style).
+Audio separation and lip-sync driving (InfiniteTalk-style). The lip-sync progress bar also follows nodes that sit inside subgraphs.
 
 ### `WanNodeExperiments/Video`, `/Postprocess`
 Video import/export helpers and post passes.

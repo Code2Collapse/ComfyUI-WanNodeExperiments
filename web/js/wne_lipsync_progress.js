@@ -9,6 +9,19 @@
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 
+// A node inside a subgraph is named "outer:inner[:deeper]" by the server; app.graph is the root only (C2C L2.47).
+function findNodeByExecId(idLike) {
+    let g = app.graph;
+    let node = null;
+    const parts = String(idLike ?? "").split(":");
+    for (let i = 0; i < parts.length && g; i++) {
+        node = (g._nodes || []).find((n) => String(n.id) === parts[i]) || null;
+        if (!node) return null;
+        g = i < parts.length - 1 ? node.subgraph : g;
+    }
+    return node;
+}
+
 const TARGETS = new Set(["WNE_AdvancedAudioSeparator", "WNE_InfiniteTalkV2V"]);
 
 if (!(app.extensions || []).some((e) => e?.name === "WNE.LipSyncProgress")) app.registerExtension({
@@ -40,11 +53,11 @@ if (!(app.extensions || []).some((e) => e?.name === "WNE.LipSyncProgress")) app.
     async setup() {
         api.addEventListener("wne.lipsync.progress", (ev) => {
             const d = ev.detail || {};
-            const node = app.graph?._nodes?.find((n) => String(n.id) === String(d.node));
+            const node = findNodeByExecId(d.node);
             if (!node) return;
             node.__wneProg = { step: d.step || "", pct: +d.pct || 0,
                                label: d.label || "", t: performance.now() };
-            app.graph.setDirtyCanvas(true, false);
+            app.canvas?.setDirty?.(true, false);
         });
     },
 });
