@@ -68,6 +68,12 @@ automation lanes (LoRA, Camera, Seed, Pose). All seven tracks render as real
 DOM elements. `WanDirectorExtraArgs` carries the advanced quality-stack
 options as a single connectable bundle so the main node stays readable.
 
+The Director's preview proxies (2026-10-26) now show true colours from RGB sources such as PNG-coded clips:
+- Before, ffmpeg converted those with its default BT.601 matrix into an untagged file, and players show that as
+  BT.709, so pure green was 40/255 off.
+- Now they convert with BT.709 in limited range, and the file is tagged.
+- A YUV source keeps its own colour tags, as before.
+
 ---
 
 ## Two things that will save you time

@@ -122,6 +122,22 @@ def _duration_sec(path: str) -> float:
         return 0.0
 
 
+_RGB_PIX = ("rgb", "bgr", "argb", "abgr", "gbr", "pal8", "rgba", "bgra", "0rgb", "0bgr", "x2rgb", "x2bgr")
+
+
+def _is_rgb_source(path: str) -> bool:
+    """The source's pixels are RGB (a PNG / ProRes 4444 RGB / GIF clip), so making the proxy converts RGB -> YUV."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=30)
+        pix = str(((json.loads(out.stdout or "{}").get("streams") or [{}])[0]).get("pix_fmt") or "")
+        return pix.startswith(_RGB_PIX)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _build_proxy(src: str, dst: str, height: int, key: str) -> None:
     """ffmpeg transcode in a worker thread; progress goes into _jobs[key]."""
     dur = _duration_sec(src)
@@ -129,8 +145,16 @@ def _build_proxy(src: str, dst: str, height: int, key: str) -> None:
     # -vf scale only DOWN (never upscale); -2 keeps aspect + even dims. fps is
     # left untouched so the proxy stays frame-accurate to the original.
     vf = f"scale=-2:'min({int(height)},ih)':flags=bicubic,format=yuv420p"
+    tags = []
+    if _is_rgb_source(src):
+        # L9.67: an RGB source converts with ffmpeg's default BT.601 matrix into an untagged file, which players show
+        # as BT.709 (pure green 40/255 off, measured). Convert with BT.709 limited and say so. A YUV source keeps its
+        # own matrix and tags (ffmpeg carries them over); forcing BT.709 there would shift an untagged HD clip.
+        vf = (f"scale=-2:'min({int(height)},ih)':flags=bicubic:out_color_matrix=bt709:out_range=tv,"
+              "format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv")
+        tags = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-           "-i", src, "-vf", vf,
+           "-i", src, "-vf", vf, *tags,
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
            "-c:a", "aac", "-b:a", "128k",
            "-movflags", "+faststart",
