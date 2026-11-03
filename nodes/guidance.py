@@ -290,7 +290,8 @@ class STGGuidance:
                                              "tooltip": "Comma-separated transformer BLOCK indices whose "
                                                         "self-attention is skipped in the weak pass (Wan 2.x: "
                                                         "0-29 on 1.3B / 5B, 0-39 on 14B). Cross-attention is never "
-                                                        "skipped."}),
+                                                        "skipped. On ComfyUI versions that do not report block "
+                                                        "numbers, the numbers count attention calls instead."}),
             },
         }
 

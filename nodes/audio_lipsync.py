@@ -320,13 +320,19 @@ class WNE_InfiniteTalkV2V:
         from ..wanwrapper.nodes_sampler import WanVideoSampler
         from ..wanwrapper.nodes import WanVideoDecode
         B, H, W, _ = images.shape
+        if B < 5:
+            raise RuntimeError(f"WNE_InfiniteTalkV2V: the clip has {B} frames; InfiniteTalk needs at least 5 frames.")
+        # the vendored loop adds (window - motion_frame) new frames per window, so motion_frame must stay below the
+        # window: 25 for the usual 81-frame window, half the window for short clips (26 frames used to divide by 0)
+        window = ((min(81, B) - 1) // 4) * 4 + 1
+        motion = min(25, (window - 1) // 2)
         try:
             embed_node = WanVideoImageToVideoMultiTalk()
             # V2V: the WHOLE source clip goes to start_image (the vendored node resizes every frame and the
             # infinitetalk loop drives each window from its source frames); images[:1] made it I2V from frame 0.
             image_embeds = embed_node.process(
                 vae=vae, width=W - W % 16, height=H - H % 16, frame_window_size=min(81, B),
-                motion_frame=25, force_offload=True, colormatch="disabled", start_image=images,
+                motion_frame=motion, force_offload=True, colormatch="disabled", start_image=images,
                 tiled_vae=False, mode="infinitetalk")[0]
             _progress(node_id, "generate", 0.45, "sampling")
             sampler = WanVideoSampler()

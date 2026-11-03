@@ -45,9 +45,13 @@ space, so it is not a drop-in replacement for the stock encoder).
 The sampler and the guidance stack (APG, TCFG, rescaling, attention
 interception). Guidance nodes are where most of the R&D churn happens —
 read each node's description before wiring it into a production graph.
-On ComfyUI 0.39 and later (2026-11-03), STG, T5 Attention Amplifier, UltraViCo and FreeLOC work again:
-- Core now passes attention inputs in a wrapper that these nodes did not read. STG crashed and the other three did
-  nothing.
+On ComfyUI 0.39 and later (fixed 2026-11-03), STG, T5 Attention Amplifier, UltraViCo and FreeLOC reach the model's
+attention again:
+- Core now passes attention inputs in a wrapper that these nodes did not read. STG crashed and the other three
+  silently did nothing.
+- The fix is tested on CPU with stand-in attention; it has **not yet been run with real Wan weights on a GPU**.
+- UltraViCo and FreeLOC build a full token-by-token bias. On long or large clips this can need several GB per layer,
+  so start with short, small clips.
 - STG's `layer_indices` are transformer **block** numbers. Only the self-attention of those blocks is skipped.
 
 ### `WanNodeExperiments/LongVideo`

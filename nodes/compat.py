@@ -193,6 +193,19 @@ def _stack():
 
 def _reset_layer_counter():
     _tls.layer = 0
+    _tls.block = None
+    _tls.block_call = 0
+
+
+def _block_call(block) -> int:
+    """0 for the first attention call inside a transformer block, 1 for the next, ... (reset when the block number
+    changes). Core's Wan blocks run self-attention first, then cross-attention."""
+    if getattr(_tls, "block", None) != block:
+        _tls.block = block
+        _tls.block_call = 0
+    else:
+        _tls.block_call = getattr(_tls, "block_call", 0) + 1
+    return _tls.block_call
 
 
 def _next_layer():
@@ -228,6 +241,10 @@ def _wrapped_optimized_attention(q, k, v, heads, *args, **kwargs):
         topts = kwargs.get("transformer_options") or {}
         block = topts.get("block_index") if isinstance(topts, dict) else None
         is_self = qt.dim() >= 2 and kt.dim() >= 2 and qt.shape[-2] == kt.shape[-2]
+        if block is not None:
+            # equal lengths alone are not enough: a latent with exactly as many tokens as the text (512) made
+            # cross-attention look like self-attention. Only a block's FIRST attention call is its self-attention.
+            is_self = is_self and _block_call(block) == 0
         if is_self and mod.skip(int(block) if block is not None else layer):
             # attention's output layout is (B, L, heads * dim_head) - exactly v's (B, L, heads * dim_head)
             return v.take() if _is_container(v) else v
