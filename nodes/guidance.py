@@ -287,7 +287,10 @@ class STGGuidance:
                 "skip_mode": (["attention", "residual"], {"default": "attention"}),
                 "stg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.05}),
                 "layer_indices": ("STRING", {"default": "8,9", "multiline": False,
-                                             "tooltip": "Comma-separated attention layer indices to skip."}),
+                                             "tooltip": "Comma-separated transformer BLOCK indices whose "
+                                                        "self-attention is skipped in the weak pass (Wan 2.x: "
+                                                        "0-29 on 1.3B / 5B, 0-39 on 14B). Cross-attention is never "
+                                                        "skipped."}),
             },
         }
 

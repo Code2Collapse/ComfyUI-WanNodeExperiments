@@ -266,8 +266,11 @@ class WNE_InfiniteTalkV2V:
         _progress(unique_id, "embeds", 0.25, "wav2vec audio embeds")
         from ..wanwrapper.multitalk.nodes import MultiTalkWav2VecEmbeds
         emb_node = MultiTalkWav2VecEmbeds()
-        emb = emb_node.process(wav2vec_model, [audio], num_frames=int(B), fps=float(fps),
-                               audio_scale=1.0, audio_cfg_scale=1.0, multi_audio_type="para")
+        # By name, against the vendored signature (wav2vec_model, normalize_loudness, fps, num_frames, audio_1, ...):
+        # the old positional `[audio]` landed in normalize_loudness and audio_1 was missing - TypeError on every run.
+        emb = emb_node.process(wav2vec_model=wav2vec_model, normalize_loudness=True, fps=float(fps),
+                               num_frames=int(B), audio_1=audio, audio_scale=1.0, audio_cfg_scale=1.0,
+                               multi_audio_type="para")
         multitalk_embeds = emb[0]
 
         _progress(unique_id, "generate", 0.35, "InfiniteTalk sampling (delegated)")
@@ -319,15 +322,19 @@ class WNE_InfiniteTalkV2V:
         B, H, W, _ = images.shape
         try:
             embed_node = WanVideoImageToVideoMultiTalk()
+            # V2V: the WHOLE source clip goes to start_image (the vendored node resizes every frame and the
+            # infinitetalk loop drives each window from its source frames); images[:1] made it I2V from frame 0.
             image_embeds = embed_node.process(
                 vae=vae, width=W - W % 16, height=H - H % 16, frame_window_size=min(81, B),
-                motion_frame=25, start_image=images[:1], colormatch="disabled",
-                tiled_vae=False, multitalk_embeds=multitalk_embeds)[0]
+                motion_frame=25, force_offload=True, colormatch="disabled", start_image=images,
+                tiled_vae=False, mode="infinitetalk")[0]
             _progress(node_id, "generate", 0.45, "sampling")
             sampler = WanVideoSampler()
+            # multitalk_embeds belong to the SAMPLER (nodes_sampler.py signature); riflex_freq_index is required.
             samples = sampler.process(
-                model=wan_model, image_embeds=image_embeds, steps=6, cfg=1.0, shift=7.0,
-                seed=0, scheduler="flowmatch_distill", force_offload=True)[0]
+                model=wan_model, image_embeds=image_embeds, shift=7.0, steps=6, cfg=1.0,
+                seed=0, scheduler="flowmatch_distill", riflex_freq_index=0, force_offload=True,
+                multitalk_embeds=multitalk_embeds)[0]
             _progress(node_id, "decode", 0.9, "VAE decode")
             frames = WanVideoDecode().decode(vae=vae, samples=samples, enable_vae_tiling=False,
                                              tile_x=272, tile_y=272, tile_stride_x=144,

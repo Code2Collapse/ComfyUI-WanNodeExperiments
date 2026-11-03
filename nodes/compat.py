@@ -201,6 +201,16 @@ def _next_layer():
     return n
 
 
+def _is_container(t) -> bool:
+    """ComfyUI 0.39+ passes q / k / v as AttentionTensorContainer (single-owner; peek() reads, take() consumes).
+    Duck-typed so this works whether or not comfy imported here."""
+    return hasattr(t, "peek") and hasattr(t, "take") and not torch.is_tensor(t)
+
+
+def _peek(t):
+    return t.peek() if _is_container(t) else t
+
+
 def _wrapped_optimized_attention(q, k, v, heads, *args, **kwargs):
     stack = _stack()
     if not stack:
@@ -208,20 +218,27 @@ def _wrapped_optimized_attention(q, k, v, heads, *args, **kwargs):
 
     layer = _next_layer()
     mod = stack[-1]
+    qt, kt = _peek(q), _peek(k)          # tensors for our own logic; the originals still go to attention
 
-    # STG-style layer skip → return a value passthrough (aligned weak model).
+    # STG-style skip → a value passthrough (aligned weak model). Only SELF-attention is ever skipped (cross-attention's
+    # v holds text tokens, so returning it broke the residual add), and the index is the transformer BLOCK when core
+    # names it (transformer_options["block_index"], set by core's Wan / LTX / Flux loops) - the same numbers the Kijai
+    # fallback passes as slg_layers. The per-call counter is only the fallback for models that do not name blocks.
     try:
-        if mod.skip(layer):
-            out = v
-            # match optimized_attention's default output shape (B, L, dim)
-            return out
+        topts = kwargs.get("transformer_options") or {}
+        block = topts.get("block_index") if isinstance(topts, dict) else None
+        is_self = qt.dim() >= 2 and kt.dim() >= 2 and qt.shape[-2] == kt.shape[-2]
+        if is_self and mod.skip(int(block) if block is not None else layer):
+            # attention's output layout is (B, L, heads * dim_head) - exactly v's (B, L, heads * dim_head)
+            return v.take() if _is_container(v) else v
     except Exception:  # noqa: BLE001
         pass
 
-    # Additive logit bias (UltraViCo decay / T5 amplification).
+    # Additive logit bias (UltraViCo decay / T5 amplification). Modifiers read tensors, never containers (on core
+    # 0.39+ q.dim() raised on the container, the error was swallowed and the modifier silently did nothing).
     bias = None
     try:
-        bias = mod.bias(layer, q, k)
+        bias = mod.bias(layer, qt, kt)
     except Exception:  # noqa: BLE001
         bias = None
 
@@ -234,7 +251,7 @@ def _wrapped_optimized_attention(q, k, v, heads, *args, **kwargs):
         mask = args[0]
         args = args[1:]
     if mask is not None and mask.dtype == torch.bool:
-        mask = torch.zeros_like(mask, dtype=q.dtype).masked_fill(~mask, float("-inf"))
+        mask = torch.zeros_like(mask, dtype=qt.dtype).masked_fill(~mask, float("-inf"))
     merged = bias if mask is None else (mask + bias)
     try:
         return _orig_optimized_attention(q, k, v, heads, merged, *args, **kwargs)
