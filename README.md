@@ -45,6 +45,10 @@ space, so it is not a drop-in replacement for the stock encoder).
 The sampler and the guidance stack (APG, TCFG, rescaling, attention
 interception). Guidance nodes are where most of the R&D churn happens —
 read each node's description before wiring it into a production graph.
+On ComfyUI 0.39 and later (2026-11-03), STG, T5 Attention Amplifier, UltraViCo and FreeLOC work again:
+- Core now passes attention inputs in a wrapper that these nodes did not read. STG crashed and the other three did
+  nothing.
+- STG's `layer_indices` are transformer **block** numbers. Only the self-attention of those blocks is skipped.
 
 ### `WanNodeExperiments/LongVideo`
 Strategies for generating past the model's native window: segment splicing,
@@ -57,6 +61,8 @@ than generating from scratch.
 
 ### `WanNodeExperiments/Audio`, `/LipSync`
 Audio separation and lip-sync driving (InfiniteTalk-style). The lip-sync progress bar also follows nodes that sit inside subgraphs.
+**InfiniteTalk V2V** passes the whole source clip and the driving audio to the bundled MultiTalk pipeline (fixed
+2026-11-03; before, every run stopped with a TypeError).
 
 ### `WanNodeExperiments/Video`, `/Postprocess`
 Video import/export helpers and post passes.
