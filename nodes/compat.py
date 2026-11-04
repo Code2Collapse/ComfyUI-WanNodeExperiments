@@ -155,7 +155,20 @@ def set_unet_wrapper(m, fn) -> bool:
     if detect_model(m) == "wanvideo":
         return False
     if hasattr(m, "set_model_unet_function_wrapper"):
-        m.set_model_unet_function_wrapper(fn)
+        # A22 L9.123 N3: core keeps ONE model_function_wrapper slot. Compose with a wrapper already there (another
+        # WNE node earlier in the chain, TeaCache, MagCache ...) instead of silently replacing it: the new wrapper
+        # runs outermost and its apply_model calls the previous wrapper.
+        prev = (getattr(m, "model_options", None) or {}).get("model_function_wrapper")
+        if prev is not None and prev is not fn:
+            def composed(apply_model, args, _outer=fn, _inner=prev):
+                def through_inner(x, t, **c):
+                    inner_args = dict(args)
+                    inner_args.update(input=x, timestep=t, c=c)
+                    return _inner(apply_model, inner_args)
+                return _outer(through_inner, args)
+            m.set_model_unet_function_wrapper(composed)
+        else:
+            m.set_model_unet_function_wrapper(fn)
         return True
     return False
 

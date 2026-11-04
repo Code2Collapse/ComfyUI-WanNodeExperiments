@@ -27,11 +27,34 @@ CAT_VAE = "WanNodeExperiments/VAE"
 # --------------------------------------------------------------------------- #
 # Shared decode helper
 # --------------------------------------------------------------------------- #
+def _tensor_fp(t) -> str:
+    """IS_CHANGED part for a tensor input. Core passes LINKED inputs as None (constants only, execution.py
+    get_input_data(..., None)) and its own cache key already covers them; a tensor passed directly is hashed.
+    A22 L9.123 N13: dereferencing None raised, the value became NaN, and these VAE nodes never cached."""
+    if t is None or not hasattr(t, "detach"):
+        return "link"
+    import hashlib
+    return hashlib.md5(t.detach().cpu().contiguous().numpy().tobytes()).hexdigest()
+
+
+def _latent_units(vae, tile_px, overlap_px):
+    """Pixel tile / overlap (what the widgets say) -> latent cells (what vae.decode_tiled takes), the conversion
+    core's VAE Decode (Tiled) does with vae.spacial_compression_decode(). A22 L9.123 N10: pixels were passed straight
+    through, so a 512 px tile became 512 latent cells (4096 px) and nothing was tiled."""
+    try:
+        comp = int(vae.spacial_compression_decode())
+    except Exception:  # noqa: BLE001 - older VAE objects: Wan 2.1 is 8x
+        comp = 8
+    comp = max(1, comp)
+    return max(1, int(tile_px) // comp), max(0, int(overlap_px) // comp)
+
+
 def _vae_decode(vae, samples, tile_size=0, overlap=64):
-    """Decode a latent to IMAGE [N,H,W,3], with a tiled fallback on failure."""
+    """Decode a latent to IMAGE [N,H,W,3], with a tiled fallback on failure. tile_size / overlap are pixels."""
     if tile_size and tile_size > 0 and hasattr(vae, "decode_tiled"):
         try:
-            return vae.decode_tiled(samples, tile_x=tile_size, tile_y=tile_size, overlap=overlap)
+            t_lat, o_lat = _latent_units(vae, tile_size, overlap)
+            return vae.decode_tiled(samples, tile_x=t_lat, tile_y=t_lat, overlap=o_lat)
         except Exception as exc:  # noqa: BLE001
             log.warning("[WanNodeExperiments] decode_tiled failed (%s); plain decode", exc)
     try:
@@ -39,7 +62,8 @@ def _vae_decode(vae, samples, tile_size=0, overlap=64):
     except Exception as exc:  # noqa: BLE001
         if hasattr(vae, "decode_tiled"):
             log.warning("[WanNodeExperiments] decode OOM/err (%s); falling back to tiled", exc)
-            return vae.decode_tiled(samples, tile_x=256, tile_y=256, overlap=overlap)
+            t_lat, o_lat = _latent_units(vae, 256, overlap)
+            return vae.decode_tiled(samples, tile_x=t_lat, tile_y=t_lat, overlap=o_lat)
         raise
 
 
@@ -167,8 +191,7 @@ class RefDecoderVAEDecode:
 
     @classmethod
     def IS_CHANGED(cls, samples, vae, reference_image, dropout_rate, **kw):
-        import hashlib
-        h = hashlib.md5(reference_image.detach().cpu().numpy().tobytes()).hexdigest()
+        h = _tensor_fp(reference_image)
         return f"refdec-{dropout_rate}-{h}"
 
 
@@ -226,8 +249,7 @@ class WanLockedDecode:
     @classmethod
     def IS_CHANGED(cls, samples, vae, reference_frame, max_tile_size, color_match_method,
                    apply_every_window, window_size=16):
-        import hashlib
-        h = hashlib.md5(reference_frame.detach().cpu().numpy().tobytes()).hexdigest()
+        h = _tensor_fp(reference_frame)
         return f"locked-{max_tile_size}-{color_match_method}-{apply_every_window}-{window_size}-{h}"
 
 
@@ -281,8 +303,7 @@ class WaveletColorLock:
 
     @classmethod
     def IS_CHANGED(cls, reference_frame, wavelet_levels, lock_subbands, cache_mode, **kw):
-        import hashlib
-        h = hashlib.md5(reference_frame.detach().cpu().numpy().tobytes()).hexdigest()
+        h = _tensor_fp(reference_frame)
         return f"wavelet-{wavelet_levels}-{lock_subbands}-{cache_mode}-{h}"
 
 
@@ -423,8 +444,7 @@ class YUVColorLockDecode:
 
     @classmethod
     def IS_CHANGED(cls, samples, vae, reference_frame, yuv_lock_mode, chroma_blend):
-        import hashlib
-        h = hashlib.md5(reference_frame.detach().cpu().numpy().tobytes()).hexdigest()
+        h = _tensor_fp(reference_frame)
         return f"yuv-{yuv_lock_mode}-{chroma_blend}-{h}"
 
 
@@ -555,9 +575,10 @@ class WanVAEDecodeTiled:
             s = samples["samples"]
             if temporal_tile and temporal_tile > 0 and hasattr(vae, "decode_tiled"):
                 try:
+                    t_lat, o_lat = _latent_units(vae, tile_size or 512, overlap)
                     img = vae.decode_tiled(
-                        s, tile_x=tile_size or 512, tile_y=tile_size or 512,
-                        overlap=overlap, tile_t=temporal_tile, overlap_t=temporal_overlap)
+                        s, tile_x=t_lat, tile_y=t_lat,
+                        overlap=o_lat, tile_t=temporal_tile, overlap_t=temporal_overlap)
                     _clean_vram()
                     return (_trim_to_source(_as_nhwc(img), samples),)
                 except TypeError:
@@ -625,8 +646,7 @@ class WanVAEEncode:
 
     @classmethod
     def IS_CHANGED(cls, pixels, vae, tile_size, overlap, frames=FRAME_MODES[0]):
-        import hashlib
-        h = hashlib.md5(pixels.detach().cpu().numpy().tobytes()).hexdigest()
+        h = _tensor_fp(pixels)
         return f"wvaeenc-{tile_size}-{overlap}-{frames}-{h}"
 
 
