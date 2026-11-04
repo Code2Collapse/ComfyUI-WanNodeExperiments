@@ -55,6 +55,18 @@ attention again:
 - STG's `layer_indices` are transformer **block** numbers. Only the self-attention of those blocks is skipped.
 - Chaining (fixed 2026-11-04): two guidance or sampler nodes that wrap the model, or one of them after another
   pack's model wrapper (TeaCache, MagCache ...), now all run. Before, the last one silently replaced the others.
+- CFG-Zero* and Tangential-Damping CFG (fixed 2026-11-04) work on the noise / velocity prediction, as core's
+  versions and the papers do. Before, they worked on the denoised image. CFG-Zero*'s zero-init now leaves the
+  first step's latent as it is; it used to push that step toward an all-zero latent.
+- ZeResFDG (fixed 2026-11-04) leaves the prediction alone at cfg 1. At cfg 1 core skips the negative pass, and the
+  node re-weighted the whole prediction's frequencies, changing every cfg-1 (distilled / lightx2v) image.
+- MoE Cross-Fade Router (fixed 2026-11-04) with `model_low` connected hands over to the low expert after the fade
+  window. It kept the high one. A failing low expert now stops the run with the reason; it used to fall back
+  silently to single-model smoothing.
+
+These guidance fixes are tested on CPU with stand-in predictions. They are **not run with real Wan weights on a
+GPU**, and no image-quality A/B was made. `model_low` is called without being loaded through ComfyUI's model
+management first, which on a GPU may be the failure that used to be hidden (NOT VERIFIED).
 
 The VAE decode nodes (fixed 2026-11-04) tile in pixels, like core's VAE Decode (Tiled). Before, a 512 px tile was
 passed to the VAE as 512 latent cells (4096 px), so a large decode was not tiled at all. The VAE nodes' cache

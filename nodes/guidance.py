@@ -19,6 +19,8 @@ Algorithm sources (cross-checked against public code):
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 from . import compat
@@ -215,6 +217,10 @@ class ZeResFDGuidance:
                 uncond = args["uncond_denoised"]
                 scale = args["cond_scale"]
                 idx = step.update(args["sigma"])
+                if math.isclose(float(scale), 1.0):
+                    # A22 L9.123 N6: at cfg 1 core skips the uncond pass and hands us uncond = 0, so delta was the
+                    # whole cond prediction and its bands were re-weighted. No uncond = nothing to guide.
+                    return args["denoised"]
                 dims = list(range(1, cond.ndim))
 
                 cond_eff = cond
@@ -400,21 +406,30 @@ class MoECrossFadeRouter:
             if model_low is not None:
                 low_apply = getattr(getattr(model_low, "model", None), "apply_model", None)
 
+            def _low(x, t, c):
+                try:
+                    return low_apply(x, t, **c)
+                except Exception as exc:  # noqa: BLE001
+                    # A22 L9.123 N7: this was swallowed and the node fell back to single-model smoothing, so a
+                    # connected model_low quietly did nothing.
+                    raise RuntimeError(
+                        f"MoE Cross-Fade Router: the model_low expert failed ({exc}). Disconnect model_low to use "
+                        "single-model boundary smoothing instead.") from exc
+
             def unet_wrapper(apply_model, args):
                 x, t, c = args["input"], args["timestep"], args["c"]
                 idx = step.update(t)
-                out = apply_model(x, t, **c)
                 w = self._weight(idx, switch_step, fade_window, fade_curve)
+                if low_apply is not None and w >= 1.0:
+                    # A22 L9.123 N7: past the window the LOW expert predicts (it returned the high one)
+                    return _low(x, t, c)
+                out = apply_model(x, t, **c)
                 if w <= 0.0 or w >= 1.0:
                     if low_apply is None:
                         prev["out"] = out.detach()
                     return out
                 if low_apply is not None:
-                    try:
-                        low_out = low_apply(x, t, **c)
-                        return (1.0 - w) * out + w * low_out
-                    except Exception:  # noqa: BLE001
-                        pass  # fall through to EMA smoothing
+                    return (1.0 - w) * out + w * _low(x, t, c)
                 if prev["out"] is not None and prev["out"].shape == out.shape:
                     blended = (1.0 - 0.5 * w) * out + (0.5 * w) * prev["out"]
                 else:
@@ -675,17 +690,22 @@ class CFGZeroStar:
             step = _StepState()
 
             def post_cfg(args):
+                # A22 L9.123 N4: score space, as core's CFGZeroStar and the paper (velocity for flow models:
+                # x - x0 = sigma * v). The scale was computed on the denoised predictions, and zero-init returned
+                # denoised = 0 (an all-zero latent target) where the paper zeroes the velocity (denoised = x).
+                x = args["input"]
                 cond = args["cond_denoised"]
                 uncond = args["uncond_denoised"]
                 scale = args["cond_scale"]
                 idx = step.update(args["sigma"])
                 if idx < zero_init_steps:
-                    return cond * 0.0
+                    return x.clone()
+                e_c, e_u = x - cond, x - uncond
                 dims = list(range(1, cond.ndim))
-                num = (cond * uncond).sum(dim=dims, keepdim=True)
-                den = (uncond * uncond).sum(dim=dims, keepdim=True) + 1e-8
+                num = (e_c * e_u).sum(dim=dims, keepdim=True)
+                den = (e_u * e_u).sum(dim=dims, keepdim=True) + 1e-8
                 alpha = num / den
-                return alpha * uncond + scale * (cond - alpha * uncond)
+                return x - (alpha * e_u + scale * (e_c - alpha * e_u))
 
             if not compat.set_post_cfg(m, post_cfg):
                 _warn_kijai("CFGZeroStar")
@@ -732,11 +752,14 @@ class TangentialDampingCFG:
             m = compat.clone_model(model)
 
             def post_cfg(args):
+                # A22 L9.123 N5: projected in score space (x - prediction) as core's TCFG; it was projected on the
+                # denoised predictions. The direction (remove the tangential part, 9b69268) is unchanged.
+                x = args["input"]
                 cond = args["cond_denoised"]
                 uncond = args["uncond_denoised"]
                 scale = args["cond_scale"]
-                _par, orth = _project(uncond, cond)  # orth = uncond's tangential (off-cond) part
-                uncond_damped = uncond - damping * orth
+                _par, orth = _project(x - uncond, x - cond)  # orth = uncond score's tangential (off-cond) part
+                uncond_damped = uncond + damping * orth      # x - (e_u - damping * orth)
                 return uncond_damped + scale * (cond - uncond_damped)
 
             if not compat.set_post_cfg(m, post_cfg):
