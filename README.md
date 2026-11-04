@@ -57,8 +57,9 @@ attention again:
   pack's model wrapper (TeaCache, MagCache ...), now all run. Before, the last one silently replaced the others.
 
 The VAE decode nodes (fixed 2026-11-04) tile in pixels, like core's VAE Decode (Tiled). Before, a 512 px tile was
-passed to the VAE as 512 latent cells (4096 px), so a large decode was not tiled at all. The VAE nodes are also
-served from cache again on an unchanged re-queue (their cache check failed on every run).
+passed to the VAE as 512 latent cells (4096 px), so a large decode was not tiled at all. The VAE nodes' cache
+check no longer fails on every run, so an unchanged re-queue can reuse their result (unit tested; not yet run
+live with a real Wan VAE).
 
 ### `WanNodeExperiments/LongVideo`
 Strategies for generating past the model's native window: segment splicing,
