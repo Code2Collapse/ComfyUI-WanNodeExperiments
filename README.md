@@ -50,8 +50,9 @@ attention again:
 - Core now passes attention inputs in a wrapper that these nodes did not read. STG crashed and the other three
   silently did nothing.
 - The fix is tested on CPU with stand-in attention; it has **not yet been run with real Wan weights on a GPU**.
-- UltraViCo and FreeLOC build a full token-by-token bias. On long or large clips this can need several GB per layer,
-  so start with short, small clips.
+- UltraViCo and FreeLOC (fixed 2026-11-05) no longer build the whole token-by-token bias at once. On large clips
+  (more than about 8k tokens) attention runs in row chunks with at most 256 MB of bias each; the result is the
+  same. Before, one 81x832x480 clip needed about 4 GB of bias per attention call.
 - STG's `layer_indices` are transformer **block** numbers. Only the self-attention of those blocks is skipped.
 - Chaining (fixed 2026-11-04): two guidance or sampler nodes that wrap the model, or one of them after another
   pack's model wrapper (TeaCache, MagCache ...), now all run. Before, the last one silently replaced the others.

@@ -237,6 +237,38 @@ def _peek(t):
     return t.peek() if _is_container(t) else t
 
 
+_BIAS_BUDGET_BYTES = 256 * 1024 ** 2      # largest additive bias built for one attention call
+
+
+def _chunked_bias_attention(rows_fn, layer, q, k, v, heads, L_q, L_k, args, kwargs):
+    """Attention on query-row chunks with rows_fn's bias rows (and the caller's mask rows) - see N9 above."""
+    kwargs = dict(kwargs)
+    mask = kwargs.pop("mask", None)
+    args = tuple(args)
+    if mask is None and len(args) >= 1:
+        mask = args[0]
+        args = args[1:]
+    qt = q.take() if _is_container(q) else q
+    kt = k.take() if _is_container(k) else k
+    vt = v.take() if _is_container(v) else v
+    if mask is not None and mask.dtype == torch.bool:
+        mask = torch.zeros_like(mask, dtype=qt.dtype).masked_fill(~mask, float("-inf"))
+    rows = max(1, _BIAS_BUDGET_BYTES // max(1, L_k * 4))
+    outs = []
+    for r0 in range(0, L_q, rows):
+        r1 = min(L_q, r0 + rows)
+        b = rows_fn(layer, qt, kt, r0, r1)
+        if mask is not None:
+            m = mask[..., r0:r1, :] if mask.dim() >= 2 and mask.shape[-2] == L_q else mask
+            b = m + b
+        q_chunk = qt[..., r0:r1, :]
+        try:
+            outs.append(_orig_optimized_attention(q_chunk, kt, vt, heads, b, *args, **kwargs))
+        except TypeError:
+            outs.append(_orig_optimized_attention(q_chunk, kt, vt, heads, mask=b, *args, **kwargs))
+    return torch.cat(outs, dim=-2)
+
+
 def _wrapped_optimized_attention(q, k, v, heads, *args, **kwargs):
     stack = _stack()
     if not stack:
@@ -263,6 +295,20 @@ def _wrapped_optimized_attention(q, k, v, heads, *args, **kwargs):
             return v.take() if _is_container(v) else v
     except Exception:  # noqa: BLE001
         pass
+
+    # A22 L9.123 N9: a structured self-attention bias (UltraViCo decay, FreeLOC TSA) that would not fit the budget
+    # as one dense (L, L) tensor runs as query-row chunks, each with only its rows of the bias. Softmax is per query
+    # row over all keys, so the result equals the dense call.
+    rows_fn = getattr(mod, "bias_rows", None)
+    if rows_fn is not None and qt.dim() >= 2 and kt.dim() >= 2:
+        L_q, L_k = int(qt.shape[-2]), int(kt.shape[-2])
+        if L_q * L_k * 4 > _BIAS_BUDGET_BYTES:
+            try:
+                probe = rows_fn(layer, qt, kt, 0, 1)
+            except Exception:  # noqa: BLE001
+                probe = None
+            if probe is not None:
+                return _chunked_bias_attention(rows_fn, layer, q, k, v, heads, L_q, L_k, args, kwargs)
 
     # Additive logit bias (UltraViCo decay / T5 amplification). Modifiers read tensors, never containers (on core
     # 0.39+ q.dim() raised on the container, the error was swallowed and the modifier silently did nothing).

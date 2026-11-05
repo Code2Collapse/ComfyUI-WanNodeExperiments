@@ -244,22 +244,31 @@ class _DecayModifier:
         return False
 
     def bias(self, layer_idx, q, k):
+        if q.dim() < 2:
+            return None
+        return self.bias_rows(layer_idx, q, k, 0, q.shape[-2])
+
+    def bias_rows(self, layer_idx, q, k, r0, r1):
+        """Rows r0:r1 of the (q_len, k_len) bias. A22 L9.123 N9: the interceptor asks for row chunks when the dense
+        bias would not fit its budget (about 4 GB per call at 32k tokens in fp32)."""
         if q.dim() < 2 or k.dim() < 2:
             return None
         q_len, k_len = q.shape[-2], k.shape[-2]
         if q_len != k_len:
             return None  # only self-attention
         device = q.device
-        i = torch.arange(q_len, device=device).view(-1, 1)
+        i = torch.arange(r0, r1, device=device).view(-1, 1)
         j = torch.arange(k_len, device=device).view(1, -1)
         dist = (i - j).abs()
-        bias = torch.zeros(q_len, k_len, device=device, dtype=q.dtype)
+        bias = torch.zeros(r1 - r0, k_len, device=device, dtype=q.dtype)
         bias[dist > self.window] = self.log_decay
         if self.first_override is not None and self.first_override < 0:
             fo = math.log(max(abs(self.first_override), 1e-4))
-            bias[0, self.window:] = fo
-            bias[self.window:, 0] = fo
-        return bias  # (q_len, k_len) broadcasts over heads/batch
+            if r0 == 0:
+                bias[0, self.window:] = fo
+            rows = torch.arange(r0, r1, device=device) >= self.window
+            bias[rows, 0] = fo
+        return bias  # (rows, k_len) broadcasts over heads/batch
 
 
 class UltraViCoAttentionDecay:
@@ -342,6 +351,12 @@ class _TSAModifier:
         return False
 
     def bias(self, layer_idx, q, k):
+        if q.dim() < 2:
+            return None
+        return self.bias_rows(layer_idx, q, k, 0, q.shape[-2])
+
+    def bias_rows(self, layer_idx, q, k, r0, r1):
+        """Rows r0:r1 of the TSA mask (A22 L9.123 N9: chunked when the dense mask would not fit)."""
         if self.layer_flags is not None and layer_idx < len(self.layer_flags) and not self.layer_flags[layer_idx]:
             return None
         if q.dim() < 2 or k.dim() < 2:
@@ -350,11 +365,11 @@ class _TSAModifier:
         if q_len != k_len or k_len <= self.local:
             return None
         device = q.device
-        i = torch.arange(q_len, device=device).view(-1, 1)
+        i = torch.arange(r0, r1, device=device).view(-1, 1)
         j = torch.arange(k_len, device=device).view(1, -1)
         dist = (i - j).abs()
         keep = (dist <= self.local) | ((j % self.stride) == 0)
-        bias = torch.zeros(q_len, k_len, device=device, dtype=q.dtype)
+        bias = torch.zeros(r1 - r0, k_len, device=device, dtype=q.dtype)
         bias[~keep] = float("-inf")
         return bias
 
