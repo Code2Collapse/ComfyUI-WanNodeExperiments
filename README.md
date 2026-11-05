@@ -108,6 +108,11 @@ The Director's preview proxies (2026-10-26) now show true colours from RGB sourc
 - Now they convert with BT.709 in limited range, and the file is tagged.
 - A YUV source keeps its own colour tags, as before.
 
+`vae_fp32_decode` (fixed 2026-11-05) no longer changes the VAE you wired in. The Director encodes its reference
+image with the VAE in fp32 and then puts the VAE back as it was. Before, it converted the shared VAE for the whole
+session (every other node using it was changed too) and left its input precision at bf16. Tested with a stand-in
+VAE; not yet run with a real Wan VAE.
+
 ---
 
 ## Two things that will save you time

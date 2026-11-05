@@ -1468,16 +1468,18 @@ class WanDirectorC2C:
         vae_encoded = False
         if vae is not None and vcfg["needs_image"] and optional_latent is None and img_segs:
             try:
+                import contextlib as _ctxlib
+                from .features._local_vae_hdr import fp32_vae
                 if vae_fp32_decode:
-                    from .features._local_vae_hdr import force_fp32_vae
-                    force_fp32_vae(vae)
-                    warnings.append("VAE forced to fp32 for encode/decode quality.")
+                    # A22 L9.123 N11: fp32 only for this encode; the shared VAE is restored afterwards
+                    warnings.append("Reference encoded with the VAE in fp32 (the VAE itself is left unchanged).")
 
                 # ComfyUI VAE.encode expects (B,H,W,C) float32 [0,1] and does
                 # its own movedim(-1,1) + temporal handling internally — do NOT
                 # pre-permute or unsqueeze (a 5D input corrupts the encode).
                 # ref_image is already [B,H,W,3] from _load_image_tensor.
-                encoded = vae.encode(ref_image[:, :, :, :3])
+                with (fp32_vae(vae) if vae_fp32_decode else _ctxlib.nullcontext()):
+                    encoded = vae.encode(ref_image[:, :, :, :3])
                 if isinstance(encoded, dict):
                     encoded_samples = encoded.get("samples", encoded.get("latent", None))
                 else:

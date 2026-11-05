@@ -17,6 +17,7 @@ uses the same mathematical principle.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 from typing import Optional, Tuple
@@ -43,6 +44,34 @@ def force_fp32_vae(vae) -> None:
             log.info("VAE forced to fp32 (model)")
     except (AttributeError, RuntimeError) as e:
         log.warning("Could not force VAE to fp32: %s", e)
+
+
+@contextlib.contextmanager
+def fp32_vae(vae):
+    """Run the block with the VAE in fp32 - weights AND vae_dtype (core casts inputs to vae_dtype) - then restore
+    both. A22 L9.123 N11: force_fp32_vae converted the SHARED VAE in place for the whole session and left vae_dtype
+    as it was, so fp32 weights got bf16 inputs and every other node using the VAE was changed too. bf16/fp16 ->
+    fp32 -> back is lossless, so the VAE ends exactly as it was."""
+    model = getattr(vae, "first_stage_model", None) or getattr(vae, "model", None)
+    if model is None:
+        yield vae
+        return
+    try:
+        w_dtype = next(model.parameters()).dtype
+    except StopIteration:
+        w_dtype = None
+    had_attr = hasattr(vae, "vae_dtype")
+    old_vae_dtype = getattr(vae, "vae_dtype", None)
+    try:
+        model.to(dtype=torch.float32)
+        if had_attr:
+            vae.vae_dtype = torch.float32
+        yield vae
+    finally:
+        if w_dtype is not None and w_dtype != torch.float32:
+            model.to(dtype=w_dtype)
+        if had_attr:
+            vae.vae_dtype = old_vae_dtype
 
 
 def decode_wan_spatial_tiled(
