@@ -60,8 +60,9 @@ class _StepState:
             self.step += 1
         elif self.last is None or s > self.last + 1e-9:
             self.step = 0  # sigma rose → new sampling run
-        else:
+        elif s < self.last - 1e-9:
             self.step += 1
+        # else: the same sigma again (cond and uncond as separate model calls) = the same step (A22 L9.123 N8)
         self.last = s
         return self.step
 

@@ -64,6 +64,11 @@ attention again:
   window. It kept the high one. A failing low expert now stops the run with the reason; it used to fall back
   silently to single-model smoothing.
 
+- Wan MoE Cache (fixed 2026-11-05) keeps a separate cache for the positive and the negative pass. When ComfyUI
+  ran them as two model calls (low memory, or prompts that cannot be batched), the negative pass got the positive
+  pass's cached result, so CFG did nothing. Steps are counted by sigma, so the high-to-low reset lands on
+  `switch_step`; the same applies to the guidance nodes' step counter (MoE Cross-Fade Router window).
+
 These guidance fixes are tested on CPU with stand-in predictions. They are **not run with real Wan weights on a
 GPU**, and no image-quality A/B was made. `model_low` is called without being loaded through ComfyUI's model
 management first, which on a GPU may be the failure that used to be hidden (NOT VERIFIED).

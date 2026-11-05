@@ -114,27 +114,40 @@ def _make_cache_wrapper(threshold, switch_step, mode, reset_at_switch):
     re-applied instead of recomputing the model. The cache is force-reset at the
     high→low expert switch to avoid carrying stale state across experts.
     """
-    state = {"prev_in": None, "residual": None, "acc": 0.0, "last_sigma": None, "step": -1}
+    # A22 L9.123 N8: one cache per cond / uncond group. Keyed by x only, an uncond call made separately from the
+    # cond call at the same sigma (memory split, or conds that cannot batch) saw "no change" and got the cond
+    # residual back as its prediction - CFG guidance vanished. Steps now advance when sigma goes DOWN (every call
+    # used to count as a step, so the boundary reset landed early).
+    clock = {"last_sigma": None, "step": -1}
+    groups: dict = {}
 
     def _step(sigma):
         s = float(sigma.flatten()[0]) if torch.is_tensor(sigma) else float(sigma)
-        if state["last_sigma"] is None or s > state["last_sigma"] + 1e-9:
-            state["step"] = 0
-            state["prev_in"] = None
-            state["residual"] = None
-            state["acc"] = 0.0
-        else:
-            state["step"] += 1
-        state["last_sigma"] = s
-        return state["step"]
+        last = clock["last_sigma"]
+        if last is None or s > last + 1e-9:          # a new sampling run
+            clock["step"] = 0
+            groups.clear()
+        elif s < last - 1e-9:
+            clock["step"] += 1
+        clock["last_sigma"] = s
+        return clock["step"]
+
+    def _state(args):
+        key = tuple(args.get("cond_or_uncond") or ())
+        st = groups.get(key)
+        if st is None:
+            st = groups[key] = {"prev_in": None, "residual": None, "acc": 0.0, "reset_done": False}
+        return st
 
     def wrapper(apply_model, args):
         x, t, c = args["input"], args["timestep"], args["c"]
         idx = _step(t)
-        if reset_at_switch and idx == switch_step:
+        state = _state(args)
+        if reset_at_switch and idx == switch_step and not state["reset_done"]:
             state["prev_in"] = None
             state["residual"] = None
             state["acc"] = 0.0
+            state["reset_done"] = True
 
         if state["prev_in"] is not None and state["prev_in"].shape == x.shape:
             rel = (x - state["prev_in"]).abs().mean() / (state["prev_in"].abs().mean() + 1e-8)
@@ -150,7 +163,13 @@ def _make_cache_wrapper(threshold, switch_step, mode, reset_at_switch):
         state["acc"] = 0.0
         return out
 
+    wrapper._wne_clock = clock
     return wrapper
+
+
+def _moe_cache_step(wrapper) -> int:
+    """The step index a cache wrapper is on (tests / diagnostics)."""
+    return int(wrapper._wne_clock["step"])
 
 
 class WanMoECache:
