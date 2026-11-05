@@ -238,10 +238,22 @@ class WanVACELoader:
 # --------------------------------------------------------------------------- #
 # GGUF loader
 # --------------------------------------------------------------------------- #
+def _gguf_fp16_bytes(reader) -> int:
+    """RAM the fp16 state dict of a GGUF takes (every tensor dequantized)."""
+    total = 0
+    for t in reader.tensors:
+        n = 1
+        for d in t.shape:
+            n *= int(d)
+        total += n * 2
+    return total
+
+
 class WanGGUFModelLoader:
     """Load a GGUF-quantized Wan model → native MODEL.
 
-    Reads the GGUF with the ``gguf`` library, dequantizes tensors to fp16, and
+    Reads the GGUF with the ``gguf`` library, dequantizes tensors to fp16 (RAM = the fp16 size, checked before
+    loading; ComfyUI-GGUF keeps weights quantized), and
     builds a native model via ``comfy.sd.load_diffusion_model_state_dict``. If
     the ``gguf`` package's dequantizer is unavailable for a given quant type, a
     clear error is raised (install/route through ComfyUI-GGUF for K-quants).
@@ -263,7 +275,8 @@ class WanGGUFModelLoader:
     RETURN_NAMES = ("model",)
     FUNCTION = "load"
     CATEGORY = CATEGORY
-    DESCRIPTION = "Load a GGUF-quantized Wan model as native ComfyUI MODEL."
+    DESCRIPTION = ("Load a GGUF-quantized Wan model as a native ComfyUI MODEL. The weights are dequantized to fp16, "
+                   "so it needs the fp16 size in RAM (checked first); ComfyUI-GGUF keeps them quantized.")
 
     def load(self, gguf_name, force_offload=True):
         try:
@@ -273,6 +286,19 @@ class WanGGUFModelLoader:
 
             path = _resolve_path(gguf_name)
             reader = _gguf.GGUFReader(path)
+            # A22 L9.123 N12: every tensor becomes fp16 in RAM here (a Q4 14B file of ~8 GB is ~28 GB). Refuse
+            # up front when that does not fit, instead of swapping the machine or getting the process killed.
+            need = _gguf_fp16_bytes(reader)
+            try:
+                import psutil
+                avail = int(psutil.virtual_memory().available)
+            except Exception:  # noqa: BLE001 - no reading: let the load try
+                avail = None
+            if avail is not None and need > avail * 0.9:
+                raise RuntimeError(
+                    f"WNE GGUF loader: this model needs about {need / 1e9:.1f} GB of RAM once dequantized to fp16, "
+                    f"and {avail / 1e9:.1f} GB is free. This loader does not keep the weights quantized: use "
+                    "ComfyUI-GGUF's 'Unet Loader (GGUF)' for low-RAM loading, or free memory.")
             sd = {}
             for tensor in reader.tensors:
                 name = str(tensor.name)

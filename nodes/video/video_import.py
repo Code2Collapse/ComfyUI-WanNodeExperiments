@@ -122,6 +122,23 @@ def _resize(frames: np.ndarray, tw: int, th: int) -> np.ndarray:
     return out
 
 
+def _stack_frames(frames: list, clip: bool = True) -> np.ndarray:
+    """Frames -> one float32 [N, H, W, 3] array in 0..1, sized to the first frame. A22 L9.123 N12: the list, a
+    stacked copy, an astype copy and a clip copy were all alive at once (3-4x the clip in RAM); this fills one
+    preallocated array, releasing each frame as it goes, and clips in place."""
+    h0, w0 = frames[0].shape[:2]
+    out = np.empty((len(frames), h0, w0, 3), dtype=np.float32)
+    for i in range(len(frames)):
+        f = frames[i]
+        if f.shape[:2] != (h0, w0):
+            f = cv2.resize(f, (w0, h0), interpolation=cv2.INTER_AREA)
+        out[i] = f[..., :3]
+        frames[i] = None
+    if clip:
+        np.clip(out, 0.0, 1.0, out=out)
+    return out
+
+
 class WNE_VideoImport:
     """Import a video (any format) or EXR sequence as an IMAGE batch."""
 
@@ -233,12 +250,10 @@ class WNE_VideoImport:
         if not frames:
             raise RuntimeError(f"no frames decoded from {path}")
         # unify size (sequences/EXR may vary) to the first frame's, then optional resize
-        h0, w0 = frames[0].shape[:2]
-        uni = np.stack([f if f.shape[:2] == (h0, w0)
-                        else cv2.resize(f, (w0, h0), interpolation=cv2.INTER_AREA)
-                        for f in frames], axis=0).astype(np.float32)
+        uni = _stack_frames(frames, clip=False)
+        del frames
         uni = _resize(uni, int(target_width), int(target_height))
-        uni = np.clip(uni[..., :3], 0.0, 1.0)
+        np.clip(uni, 0.0, 1.0, out=uni)                  # after the resize, as before
         out = torch.from_numpy(np.ascontiguousarray(uni))
         return (out, float(fps), int(out.shape[0]), int(out.shape[2]), int(out.shape[1]))
 

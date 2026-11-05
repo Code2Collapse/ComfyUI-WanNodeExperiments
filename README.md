@@ -69,6 +69,11 @@ attention again:
   pass's cached result, so CFG did nothing. Steps are counted by sigma, so the high-to-low reset lands on
   `switch_step`; the same applies to the guidance nodes' step counter (MoE Cross-Fade Router window).
 
+- WNE GGUF loader (2026-11-05): it dequantizes every weight to fp16, so it needs the fp16 size in RAM (a Q4 14B
+  file of about 8 GB needs about 28 GB). It now checks that before loading and stops with a message if it does
+  not fit. ComfyUI-GGUF's Unet Loader (GGUF) keeps the weights quantized.
+- Video Import (2026-11-05) holds about one copy of the clip while it builds the output (it held three to four).
+
 These guidance fixes are tested on CPU with stand-in predictions. They are **not run with real Wan weights on a
 GPU**, and no image-quality A/B was made. `model_low` is called without being loaded through ComfyUI's model
 management first, which on a GPU may be the failure that used to be hidden (NOT VERIFIED).
