@@ -107,9 +107,10 @@ class WNE_AdvancedAudioSeparator:
                 "msr_hifi_restore": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Multi-Stage Restoration: pipe the separated vocals through a "
-                               "HiFi++ GAN artifact restorer. Requires a hifi_pp checkpoint at "
-                               "ComfyUI/models/audio_restore/hifi_pp.ckpt — if absent the stage "
-                               "warns and passes vocals through unchanged (never fakes it)."}),
+                               "HiFi++ GAN artifact restorer (ComfyUI/models/audio_restore/hifi_pp.ckpt). "
+                               "NOT AVAILABLE YET: the HiFi++ network is not included in this pack, so "
+                               "the stage passes the vocals through unchanged and the info output says "
+                               "why (it never fakes a restore)."}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -138,8 +139,8 @@ class WNE_AdvancedAudioSeparator:
 
         note = f"model={model}"
         if msr_hifi_restore:
-            v, restored = self._hifi_restore(v)
-            note += " · hifi++ restored" if restored else " · hifi++ SKIPPED (no checkpoint)"
+            v, restored, why = self._hifi_restore(v)
+            note += " · hifi++ restored" if restored else f" · hifi++ SKIPPED ({why})"
         _progress(unique_id, "done", 1.0, "separation complete")
         return (v, i, note)
 
@@ -184,26 +185,35 @@ class WNE_AdvancedAudioSeparator:
         return voc, (ins if os.path.exists(ins) else None)
 
     def _hifi_restore(self, vocals):
-        """HiFi++ GAN post-stage. Real checkpoint or explicit pass-through."""
+        """HiFi++ GAN post-stage: (vocals, restored, reason). A real checkpoint + network, or an explicit
+        pass-through with the reason. A22 L9.143: nodes/hifi_pp_arch.py is not part of the pack, so with a checkpoint
+        installed the stage always failed and the info said "no checkpoint"; the network is now checked first, and a
+        checkpoint is only read with weights_only=True (no pickled code)."""
         try:
             import folder_paths
             ckpt = os.path.join(folder_paths.models_dir, "audio_restore", "hifi_pp.ckpt")
         except Exception:  # noqa: BLE001
             ckpt = ""
         if not (ckpt and os.path.exists(ckpt)):
-            logger.warning("WNE_AdvancedAudioSeparator: HiFi++ checkpoint not found "
-                           "(models/audio_restore/hifi_pp.ckpt) — passing vocals through.")
-            return vocals, False
+            why = "checkpoint not found: models/audio_restore/hifi_pp.ckpt"
+            logger.warning("WNE_AdvancedAudioSeparator: HiFi++ %s - passing vocals through.", why)
+            return vocals, False, why
         try:
-            state = torch.load(ckpt, map_location="cpu")
-            from .hifi_pp_arch import HiFiPlusPlus  # optional in-repo arch
+            from .hifi_pp_arch import HiFiPlusPlus  # optional in-repo arch (not shipped yet)
+        except ImportError:
+            why = "the HiFi++ network is not included in this pack yet, so the checkpoint cannot be used"
+            logger.warning("WNE_AdvancedAudioSeparator: %s - passing vocals through.", why)
+            return vocals, False, why
+        try:
+            state = torch.load(ckpt, map_location="cpu", weights_only=True)
             net = HiFiPlusPlus(); net.load_state_dict(state, strict=False); net.eval()
             with torch.inference_mode():
                 w = net(vocals["waveform"])
-            return ({"waveform": w, "sample_rate": vocals["sample_rate"]}, True)
+            return ({"waveform": w, "sample_rate": vocals["sample_rate"]}, True, "")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("HiFi++ restore failed (%s) — passing vocals through.", exc)
-            return vocals, False
+            why = f"restore failed: {exc}"
+            logger.warning("HiFi++ %s - passing vocals through.", why)
+            return vocals, False, why
 
 
 class WNE_InfiniteTalkV2V:
