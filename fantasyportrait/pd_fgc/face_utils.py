@@ -4,13 +4,19 @@ import time
 import cv2
 import numpy as np
 
-import onnx
 import onnxruntime
+
+try:  # L9.149: optional pre-check only - onnxruntime validates the model itself. An 'onnx' that cannot be imported
+    import onnx  # (protobuf mismatch in some installs) made FantasyPortrait face detection / alignment fail to load.
+except Exception:  # noqa: BLE001
+    onnx = None
+
 
 def create_onnx_session(onnx_path, providers) -> onnxruntime.InferenceSession:
     start = time.perf_counter()
-    onnx_model = onnx.load(onnx_path)
-    onnx.checker.check_model(onnx_model)
+    if onnx is not None:
+        onnx_model = onnx.load(onnx_path)
+        onnx.checker.check_model(onnx_model)
     # providers = (
     #     [
     #         (
