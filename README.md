@@ -74,6 +74,8 @@ attention again:
   file of about 8 GB needs about 28 GB). It now checks that before loading and stops with a message if it does
   not fit. ComfyUI-GGUF's Unet Loader (GGUF) keeps the weights quantized.
 - Video Import (2026-11-05) holds about one copy of the clip while it builds the output (it held three to four).
+- FantasyPortrait face detection / alignment (2026-11-06) no longer needs the `onnx` package (only onnxruntime).
+  Where `onnx` is installed but cannot be imported (a protobuf version mismatch), they failed to load.
 - Advanced Audio Separator: the HiFi++ restore stage (`msr_hifi_restore`) is not available yet - its network is
   not included in this pack. The info output now says so (it said "no checkpoint" even with one installed), and
   the vocals pass through unchanged.
