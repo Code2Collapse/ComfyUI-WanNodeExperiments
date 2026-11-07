@@ -21,6 +21,20 @@ import os
 
 import torch
 
+try:  # owner D7.91 (L7.100): one consent switch for every C2C pack (byte copy of CustomNodePacks' module)
+    from .._download_policy import allow_downloads, downloads_allowed, hf_cached_snapshot
+except ImportError:  # pragma: no cover - module loaded outside the package: nothing may download
+    import contextlib
+
+    def allow_downloads(flag):
+        return contextlib.nullcontext()
+
+    def downloads_allowed():
+        return False
+
+    def hf_cached_snapshot(repo_id):
+        return None
+
 log = logging.getLogger("WanNodeExperiments")
 
 _ATTN = ["auto", "sdpa", "eager", "flash_attention_2"]
@@ -144,12 +158,20 @@ def _find_tokenizer(model_path: str, source_repo: str):
     if os.path.isdir(sib):
         return AutoTokenizer.from_pretrained(sib)
     if source_repo:
+        # L7.100: fetch from the Hub only with the loader's allow_download; otherwise the Hugging Face cache copy
+        snap = None if downloads_allowed() else hf_cached_snapshot(source_repo)
+        if not downloads_allowed() and not snap:
+            raise RuntimeError(
+                f"Tokenizer folder '{short}-tokenizer' not found next to the model, '{source_repo}' is not in the "
+                f"Hugging Face cache, and downloading is off. Tick allow_download on the T5Gemma loader (Gemma repos "
+                f"may need a Hugging Face token), re-run the converter (it saves the tokenizer beside the encoder), "
+                f"or place the tokenizer in {sib}.")
         try:
-            return AutoTokenizer.from_pretrained(source_repo)
+            return AutoTokenizer.from_pretrained(snap or source_repo)
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
                 f"Tokenizer folder '{short}-tokenizer' not found next to the model and "
-                f"downloading '{source_repo}' failed ({exc}). Re-run the converter (it "
+                f"loading '{source_repo}' failed ({exc}). Re-run the converter (it "
                 f"saves the tokenizer beside the encoder) or place the tokenizer there.") from exc
     raise RuntimeError(f"No tokenizer found for {base}: expected sibling folder '{short}-tokenizer'.")
 
@@ -169,6 +191,12 @@ class WanT5GemmaLoader:
                            "flash_attention_2 = requires flash-attn package (fails loudly if absent)."}),
             "dtype": (list(_DTYPES), {"default": "auto",
                                       "tooltip": "Compute dtype (auto = bf16 on CUDA, fp32 on CPU)."}),
+        }, "optional": {
+            # L7.100 (owner D7.91): appended last, default off - saved workflows keep their values
+            "allow_download": ("BOOLEAN", {"default": False,
+                                           "tooltip": "Let the loader fetch the tokenizer from Hugging Face when it "
+                                                      "is not next to the model and not in the cache. Off: nothing "
+                                                      "is downloaded and the error says what is missing."}),
         }}
 
     RETURN_TYPES = ("T5GEMMA_ENCODER",)
@@ -177,7 +205,11 @@ class WanT5GemmaLoader:
     CATEGORY = "WanNodeExperiments/TextEncoders"
     DESCRIPTION = "Load a converted T5Gemma encoder (safetensors or GGUF Q8_0) with selectable attention backend."
 
-    def load(self, model_file, attention_backend, dtype):
+    def load(self, model_file, attention_backend, dtype, allow_download=False):
+        with allow_downloads(bool(allow_download)):
+            return self._load(model_file, attention_backend, dtype)
+
+    def _load(self, model_file, attention_backend, dtype):
         if model_file.startswith("<"):
             raise RuntimeError(
                 "No converted T5Gemma encoder files in models/text_encoders — run "
@@ -198,7 +230,7 @@ class WanT5GemmaLoader:
                  "name": model_file},)
 
     @classmethod
-    def IS_CHANGED(cls, model_file, attention_backend, dtype):
+    def IS_CHANGED(cls, model_file, attention_backend, dtype, allow_download=False):  # L7.100: not part of the fingerprint
         try:
             import folder_paths
             p = folder_paths.get_full_path("text_encoders", model_file)

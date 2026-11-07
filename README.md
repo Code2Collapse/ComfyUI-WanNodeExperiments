@@ -40,6 +40,7 @@ that may change shape between versions.
 Getting a Wan 2.2 model, its text encoder and VAE into memory. Includes the
 **T5Gemma** encoder path (research — T5Gemma does *not* share UMT5's embedding
 space, so it is not a drop-in replacement for the stock encoder).
+The T5Gemma loader looks for the tokenizer beside the converted encoder, then in the Hugging Face cache; it fetches it from the Hub only with its `allow_download` switch (last input, off by default, 2026-11-07).
 
 ### `WanNodeExperiments/Sampling`, `/Guidance`
 The sampler and the guidance stack (APG, TCFG, rescaling, attention
