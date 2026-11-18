@@ -163,3 +163,9 @@ label, so screen readers announce them by name. Typing 0 into a number box whose
 This pack now also follows the C2C setting **Settings > C2C > Models & Downloads > Never download models** (from
 ComfyUI-CustomNodePacks): when it is on, no node downloads model weights, even with its own Allow Download ticked.
 The `C2C_NO_DOWNLOADS` environment variable still works and takes priority.
+
+## Video proxy cache size in Settings (2026-11-18)
+
+The disk space the Video Import preview proxies may use is now a setting: *Settings > C2C > WNE > Video* (default
+2048 MB, as before; the oldest proxies are removed first). The `WNE_PROXY_CACHE_MB` environment variable still
+overrides it when set. Works without CustomNodePacks installed.
