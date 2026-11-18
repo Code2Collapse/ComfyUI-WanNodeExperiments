@@ -23,7 +23,8 @@ GET /wne/media_proxy?file=<input-relative>&height=720
   replacing the source automatically invalidates its proxy.
 - Frame-accuracy: fps is NOT changed; only spatial scale (and codec) change,
   so frame N of the proxy == frame N of the original.
-- Disk ceiling: WNE_PROXY_CACHE_MB env var (default 2048 MB). Oldest proxies
+- Disk ceiling: setting C2C > WNE > Video > proxy cache (c2c.wne.proxyCacheMB, default 2048 MB);
+  the WNE_PROXY_CACHE_MB env var wins when set. Oldest proxies
   are evicted before a new job when over the ceiling.
 
 Author: Code2Collapse. Apache-2.0.
@@ -40,7 +41,19 @@ import threading
 log = logging.getLogger("WanNodeExperiments")
 
 _SUBDIR = "wne_proxies"
-_CACHE_MB = float(os.environ.get("WNE_PROXY_CACHE_MB", "2048"))
+_CACHE_MB = 2048.0  # default; the live value comes from _cache_mb()
+
+
+def _cache_mb() -> float:
+    """Disk ceiling in MB: WNE_PROXY_CACHE_MB when set, else the C2C setting c2c.wne.proxyCacheMB (L3.02)."""
+    try:
+        from ..._c2c_saved_setting import get as _c2c_setting
+    except ImportError:  # loaded outside the pack package (tests import the module directly)
+        try:
+            from _c2c_saved_setting import get as _c2c_setting  # type: ignore
+        except ImportError:
+            return float(os.environ.get("WNE_PROXY_CACHE_MB", _CACHE_MB) or _CACHE_MB)
+    return float(_c2c_setting("c2c.wne.proxyCacheMB", _CACHE_MB, env="WNE_PROXY_CACHE_MB", parse=float))
 
 # Extensions the browser can (almost always) play natively — no proxy needed
 # unless the container hides a non-web codec; the client may still request one
@@ -97,7 +110,7 @@ def _evict_over_ceiling(incoming_hint_mb: float = 0.0) -> None:
             continue
         files.append((st.st_mtime, st.st_size, p))
         total += st.st_size / 1e6
-    budget = max(64.0, _CACHE_MB) - incoming_hint_mb
+    budget = max(64.0, _cache_mb()) - incoming_hint_mb
     if total <= budget:
         return
     for _, size, p in sorted(files):
