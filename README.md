@@ -151,3 +151,9 @@ model if it also rewrites the crop's actual pixels.
 always matches the installed code. Regenerate it after changing any node's
 `INPUT_TYPES` — the parameter tables are the node tooltips themselves, which
 means the tooltip you see in ComfyUI and the docs here are the same string.
+
+## Accessibility update (2026-11-18)
+
+The sliders, number boxes, drop-downs, colour pickers and switches in this pack's node panels now carry their row
+label, so screen readers announce them by name. Typing 0 into a number box whose range starts below zero keeps 0
+(it used to jump to the minimum).
