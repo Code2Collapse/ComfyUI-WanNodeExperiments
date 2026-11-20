@@ -169,3 +169,13 @@ The `C2C_NO_DOWNLOADS` environment variable still works and takes priority.
 The disk space the Video Import preview proxies may use is now a setting: *Settings > C2C > WNE > Video* (default
 2048 MB, as before; the oldest proxies are removed first). The `WNE_PROXY_CACHE_MB` environment variable still
 overrides it when set. Works without CustomNodePacks installed.
+
+## Kijai WanVideoWrapper compatibility (2026-11-21)
+
+- Guidance nodes (APG, CFG-Zero*, NAG, ...) now recognise a model loaded by a current Kijai WanVideoWrapper (a plain
+  ComfyUI model patcher around `WanVideoModel`) and take the path Kijai's sampler actually runs; before, the effect
+  was silently skipped.
+- Prompt Relay on a model from a current Kijai loader stops with a clear message before sampling (Kijai's
+  cross-attention layout differs from core ComfyUI's). Load the model with ComfyUI's own Wan loader to use Prompt
+  Relay; native support for Kijai models is in progress.
+- Checked against Kijai's WanVideoWrapper v1.4.8 (commit a7439db).
