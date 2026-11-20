@@ -233,6 +233,24 @@ def _kijai_class_dispatch(cross_attn) -> Callable:
     return _wan_t2v_forward
 
 
+def _kijai_signature_problem(cross_attn) -> Optional[str]:
+    """L7.128: the replacement forwards bind core comfy.ldm.wan's (x, context[, context_img_len], transformer_options).
+    Current Kijai blocks call cross_attn(x, context, grid_sizes, clip_embed=...), so grid_sizes would land in the
+    wrong parameter and the forward would break (or mask the wrong tokens) mid-sampling. Say so before patching."""
+    import inspect
+    try:
+        params = list(inspect.signature(type(cross_attn).forward).parameters)
+    except (TypeError, ValueError):
+        return None
+    third = params[3] if len(params) > 3 else None
+    if third == "grid_sizes" or "clip_embed" in params:
+        return (f"Prompt Relay cannot drive this Kijai WanVideoWrapper model yet: its cross-attention "
+                f"({type(cross_attn).__name__}) takes (x, context, grid_sizes, clip_embed, ...), the layout Prompt Relay "
+                "masks is core ComfyUI's. Load the model with ComfyUI's own Wan loader (Load Diffusion Model) to use "
+                "Prompt Relay, or turn Prompt Relay off for this model. Nothing was patched.")
+    return None
+
+
 def patch_kijai(patcher, mask_fn: Callable) -> int:
     """Patch a Kijai ``WanVideoModel`` in place. Returns the number of blocks patched.
 
@@ -251,6 +269,12 @@ def patch_kijai(patcher, mask_fn: Callable) -> int:
     blocks = getattr(transformer, "blocks", None)
     if blocks is None:
         raise RuntimeError("Kijai patch path: transformer.blocks is missing.")
+
+    for block in blocks:   # L7.128: refuse before touching any block (no half-patched model)
+        cross_attn = getattr(block, "cross_attn", None)
+        problem = _kijai_signature_problem(cross_attn) if cross_attn is not None else None
+        if problem:
+            raise RuntimeError(problem)
 
     patched = 0
     for idx, block in enumerate(blocks):
