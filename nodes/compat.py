@@ -98,6 +98,16 @@ def detect_model(model) -> str:
     mod = type(model).__module__ or ""
     if "WanVideo" in cls or "wanvideo" in mod.lower():
         return "wanvideo"
+    # L7.129: current Kijai (WanVideoModelLoader, verified against the pinned reference in tests/
+    # test_kijai_wrapper_drift.py) returns a PLAIN comfy ModelPatcher around a WanVideoModel - the patcher class says
+    # nothing, the wrapped model does. Without this the guidance nodes took the native post-CFG hook, which Kijai's
+    # sampler never calls (a silent no-op).
+    inner = getattr(model, "model", None)
+    if inner is not None:
+        icls = type(inner).__name__
+        imod = (type(inner).__module__ or "").lower()
+        if "WanVideo" in icls or "wanvideo" in imod:
+            return "wanvideo"
     if hasattr(model, "set_model_sampler_post_cfg_function") and hasattr(model, "model_options"):
         return "native"
     if hasattr(model, "model_options"):
