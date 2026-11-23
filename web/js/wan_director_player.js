@@ -76,11 +76,10 @@ function makePlayerDOM(node) {
     const stageMsg = document.createElement("div");
     stageMsg.style.cssText = `
         display:flex; flex-direction:column; align-items:center; gap:6px;
-        color:var(--c2c-gray400); font: 12px ui-sans-serif,system-ui; text-align:center; padding:8px;
-    `;
+        color:var(--c2c-gray400); font: 12px/1.25 ui-sans-serif,system-ui; text-align:center; padding:4px 8px;
+    `;    // L9.321 (matrix D13): a 30 px icon row + 8 px padding was taller than the classic stage (~70 px): icon inline
     stageMsg.innerHTML =
-        `<div style="font-size:30px;line-height:1;opacity:0.6">🎬</div>` +
-        `<div style="font-weight:600;color:var(--c2c-gray300)">Preview stage</div>` +
+        `<div style="font-weight:600;color:var(--c2c-gray300)"><span style="opacity:0.6;margin-right:6px">🎬</span>Preview stage</div>` +
         `<div style="opacity:0.8">Add image / video clips below, or run the workflow.</div>`;
     stage.append(stageImg, stageVideo, stageMsg);
 
@@ -119,7 +118,9 @@ function makePlayerDOM(node) {
     const btnFnext = mkBtn("ǀ▶", "Step forward 1 frame  (→)");
     const btnNext  = mkBtn("⏭", "Next clip");
     const btnLoop  = mkBtn("🔁", "Loop  (off)");
-    btnLoop.style.opacity = "0.45";
+    // L9.321 (matrix D14): "off" was 45 % opacity (2.99:1 at 12 px). Full contrast now; the state is aria-pressed and
+    // an accent edge + tint while looping.
+    btnLoop.setAttribute("aria-pressed", "false");
     const btnSpeed = mkBtn("1×", "Playback speed");
     const btnIn    = mkBtn("[", "Set IN point  (i)");
     const btnOut   = mkBtn("]", "Set OUT point  (o)");
@@ -183,8 +184,7 @@ function makePlayerDOM(node) {
         // Keep the framed empty-state look for any status message.
         const empty = /no clips|no preview/i.test(msg);
         stageMsg.innerHTML =
-            `<div style="font-size:30px;line-height:1;opacity:0.6">${empty ? "🎬" : "⏳"}</div>` +
-            `<div style="font-weight:600;color:var(--c2c-gray300)">${empty ? "Preview stage" : "Working…"}</div>` +
+            `<div style="font-weight:600;color:var(--c2c-gray300)"><span style="opacity:0.6;margin-right:6px">${empty ? "🎬" : "⏳"}</span>${empty ? "Preview stage" : "Working…"}</div>` +
             `<div style="opacity:0.8">${msg}</div>`;
     }
 
@@ -237,7 +237,10 @@ function makePlayerDOM(node) {
     function cycleSpeed() { state.speedIdx = (state.speedIdx + 1) % SPEEDS.length; syncSpeed(); }
     function toggleLoop() {
         state.loop = !state.loop;
-        btnLoop.style.opacity = state.loop ? "1" : "0.45";
+        btnLoop.setAttribute("aria-pressed", String(state.loop));
+        btnLoop.style.borderColor = state.loop ? "var(--c2c-cyanBright2)" : "var(--c2c-gray600)";
+        btnLoop.style.background = state.loop
+            ? "color-mix(in srgb, var(--c2c-cyanBright2) 28%, var(--c2c-gray800))" : "var(--c2c-gray800)";
         btnLoop.title = "Loop  (" + (state.loop ? "on" : "off") + ")";
     }
     function setIn()  { state.inFrac  = curFrac(); if (state.outFrac != null && state.outFrac <= state.inFrac) state.outFrac = null; updateScrub(); }
