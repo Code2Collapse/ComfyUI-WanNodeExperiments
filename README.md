@@ -175,7 +175,9 @@ overrides it when set. Works without CustomNodePacks installed.
 - Guidance nodes (APG, CFG-Zero*, NAG, ...) now recognise a model loaded by a current Kijai WanVideoWrapper (a plain
   ComfyUI model patcher around `WanVideoModel`) and take the path Kijai's sampler actually runs; before, the effect
   was silently skipped.
-- Prompt Relay on a model from a current Kijai loader stops with a clear message before sampling (Kijai's
-  cross-attention layout differs from core ComfyUI's). Load the model with ComfyUI's own Wan loader to use Prompt
-  Relay; native support for Kijai models is in progress.
+- **Prompt Relay works on models from a current Kijai loader (2026-11-23).** It drives Kijai's own text-to-video
+  and image-to-video cross-attention (`x, context, grid_sizes, clip_embed`), masks only the text attention, and never
+  penalises the negative prompt. When no mask applies, the result is identical to Kijai's own output (checked on
+  Kijai's real classes). Kijai feature paths Prompt Relay does not cover (NAG, audio, Lynx, FantasyPortrait, EchoShot,
+  LongCat, Ovi) run unchanged, and the log says once that relay is off there. Not yet run on GPU with real weights.
 - Checked against Kijai's WanVideoWrapper v1.4.8 (commit a7439db).

@@ -233,22 +233,149 @@ def _kijai_class_dispatch(cross_attn) -> Callable:
     return _wan_t2v_forward
 
 
-def _kijai_signature_problem(cross_attn) -> Optional[str]:
-    """L7.128: the replacement forwards bind core comfy.ldm.wan's (x, context[, context_img_len], transformer_options).
-    Current Kijai blocks call cross_attn(x, context, grid_sizes, clip_embed=...), so grid_sizes would land in the
-    wrong parameter and the forward would break (or mask the wrong tokens) mid-sampling. Say so before patching."""
+_KIJAI_PORTED = ("WanT2VCrossAttention", "WanI2VCrossAttention")
+
+
+def _kijai_layout(cross_attn) -> bool:
+    """True when the module's forward takes Kijai's (x, context, grid_sizes, clip_embed, ...) layout."""
     import inspect
     try:
         params = list(inspect.signature(type(cross_attn).forward).parameters)
     except (TypeError, ValueError):
-        return None
+        return False
     third = params[3] if len(params) > 3 else None
-    if third == "grid_sizes" or "clip_embed" in params:
-        return (f"Prompt Relay cannot drive this Kijai WanVideoWrapper model yet: its cross-attention "
-                f"({type(cross_attn).__name__}) takes (x, context, grid_sizes, clip_embed, ...), the layout Prompt Relay "
-                "masks is core ComfyUI's. Load the model with ComfyUI's own Wan loader (Load Diffusion Model) to use "
-                "Prompt Relay, or turn Prompt Relay off for this model. Nothing was patched.")
+    return third == "grid_sizes" or "clip_embed" in params
+
+
+def _kijai_signature_problem(cross_attn) -> Optional[str]:
+    """L7.128: a Kijai-layout cross-attention Prompt Relay has no port for (the T2V / I2V ones are ported below)."""
+    if not _kijai_layout(cross_attn) or type(cross_attn).__name__ in _KIJAI_PORTED:
+        return None
+    return f"Prompt Relay has no Kijai port for {type(cross_attn).__name__}; those blocks run unchanged."
+
+
+# -- L7.128: Prompt Relay on Kijai's own cross-attention layout ---------------------------------------------------
+# Kijai's WanAttentionBlock calls cross_attn(x, context, grid_sizes, clip_embed=..., ...). The port below reproduces
+# WanT2VCrossAttention / WanI2VCrossAttention.forward's PLAIN path (text attention, plus the CLIP image attention for
+# I2V) with Kijai's own projection order and attention(); only the text attention takes the Prompt Relay mask. Every
+# other Kijai feature path (NAG, LongCat, EchoShot RoPE, Lynx, audio, FantasyPortrait adapter, Ovi fusion) is handed
+# to Kijai's original forward unchanged (relay off for that call, said once in the log). With no mask the port is
+# bit-identical to Kijai's forward (tests/test_l7128_kijai_relay_port.py runs Kijai's real classes on CPU).
+_KIJAI_STATE_ATTR = "_c2c_prompt_relay_state"
+_KIJAI_TFWD_ATTR = "_c2c_prompt_relay_orig_tforward"
+_RELAY_OFF_LOGGED: set = set()
+
+
+def _kijai_relay_off_reason(self_module, x, kwargs) -> Optional[str]:
+    if kwargs.get("nag_context") is not None:
+        return "NAG"
+    if x.shape[-1] == 4096:
+        return "LongCat"
+    if kwargs.get("inner_t") is not None and kwargs.get("cross_freqs") is not None:
+        return "EchoShot"
+    if kwargs.get("lynx_x_ip") is not None:
+        return "Lynx"
+    if kwargs.get("audio_proj") is not None:
+        return "audio"
+    if kwargs.get("adapter_proj") is not None:
+        return "FantasyPortrait adapter"
+    if getattr(self_module, "k_fusion", None) is not None:
+        return "Ovi fusion"
+    if not hasattr(getattr(self_module, "norm_q", None), "weight") or \
+            not hasattr(getattr(self_module, "norm_k", None), "weight"):
+        return "no q/k norm"
     return None
+
+
+def _kijai_grid(grid_sizes):
+    """Kijai passes grid_sizes as a [B, 3] tensor (or a list of (F, H, W)); the mask wants one (F, H, W)."""
+    if grid_sizes is None:
+        return None
+    try:
+        if torch.is_tensor(grid_sizes):
+            g = grid_sizes[0] if grid_sizes.ndim == 2 else grid_sizes
+            return tuple(int(v) for v in g.tolist())
+        first = grid_sizes[0]
+        g = first if (isinstance(first, (list, tuple)) or torch.is_tensor(first)) else grid_sizes
+        return tuple(int(v) for v in g)
+    except Exception:  # noqa: BLE001 - an unknown layout means "use the fallback tokens per frame"
+        return None
+
+
+def _masked_sdpa(q, k, v, mask):
+    """q, k, v in Kijai's [B, L, heads, dim] layout; mask additive [Lq, Lk]. Returns [B, Lq, heads*dim]."""
+    out = torch.nn.functional.scaled_dot_product_attention(
+        q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=mask.to(q.dtype))
+    return out.transpose(1, 2).flatten(2)
+
+
+def _kijai_cross_forward(self_module, mask_fn, x, context, grid_sizes=None, clip_embed=None, **kwargs):
+    import sys
+    original = getattr(self_module, _KIJAI_ORIGINAL_ATTR)
+    attention = getattr(sys.modules.get(type(self_module).__module__), "attention", None)
+    reason = _kijai_relay_off_reason(self_module, x, kwargs) or (None if attention else "no attention()")
+    i2v = type(self_module).__name__ == "WanI2VCrossAttention"
+    if i2v and clip_embed is not None and not hasattr(getattr(self_module, "norm_k_img", None), "weight"):
+        reason = reason or "no image k norm"
+    if reason:
+        key = (type(self_module).__name__, reason)
+        if key not in _RELAY_OFF_LOGGED:
+            _RELAY_OFF_LOGGED.add(key)
+            log.warning("Prompt Relay is off for %s calls using %s (Kijai feature path); they run unchanged.",
+                        type(self_module).__name__, reason)
+        return original(x, context, grid_sizes, clip_embed=clip_embed, **kwargs)
+
+    b, n, d = x.size(0), self_module.num_heads, self_module.head_dim
+    chunks = 2 if kwargs.get("rope_func", "comfy") == "comfy_chunked" else 1
+    q = self_module.norm_q(self_module.q(x).to(self_module.norm_q.weight.dtype), num_chunks=chunks)
+    q = q.view(b, -1, n, d).to(x.dtype) if i2v else q.to(x.dtype).view(b, -1, n, d)
+    k = self_module.norm_k(self_module.k(context).to(self_module.norm_k.weight.dtype))
+    k = k.view(b, -1, n, d).to(x.dtype) if i2v else k.to(x.dtype).view(b, -1, n, d)
+    v = self_module.v(context).view(b, -1, n, d)
+
+    state = getattr(self_module, _KIJAI_STATE_ATTR, None) or {}
+    opts = {"cond_or_uncond": [1] if state.get("uncond") else [0]}
+    grid = _kijai_grid(grid_sizes)
+    if grid is not None:
+        opts["grid_sizes"] = grid
+    mask = mask_fn(q, k, opts)
+    if mask is not None:
+        out = _masked_sdpa(q, k, v, mask)
+    else:
+        out = attention(q, k, v, attention_mode=self_module.attention_mode, heads=n).flatten(2)
+
+    if i2v and clip_embed is not None:
+        k_img = self_module.norm_k_img(self_module.k_img(clip_embed).to(self_module.norm_k_img.weight.dtype))
+        k_img = k_img.view(b, -1, n, d).to(x.dtype)
+        v_img = self_module.v_img(clip_embed).view(b, -1, n, d)
+        out.add_(attention(q, k_img, v_img, attention_mode=self_module.attention_mode, heads=n).flatten(2))
+    return self_module.o(out)
+
+
+def _track_uncond(transformer) -> dict:
+    """Kijai's WanModel.forward gets is_uncond; its cross-attention does not. Note it per call so the mask keeps
+    Prompt Relay's rule of never penalising the negative prompt (core: transformer_options['cond_or_uncond'])."""
+    state = getattr(transformer, _KIJAI_STATE_ATTR, None)
+    if state is not None:
+        return state
+    state = {"uncond": False}
+    orig = getattr(transformer, "forward", None)
+    if not callable(orig):                     # nothing to wrap: every call counts as the conditional pass
+        try:
+            setattr(transformer, _KIJAI_STATE_ATTR, state)
+        except AttributeError:
+            pass
+        return state
+    had_own = "forward" in getattr(transformer, "__dict__", {})
+
+    def forward(*args, **kwargs):
+        state["uncond"] = bool(kwargs.get("is_uncond", False))
+        return orig(*args, **kwargs)
+
+    setattr(transformer, _KIJAI_TFWD_ATTR, (orig if had_own else None,))
+    setattr(transformer, _KIJAI_STATE_ATTR, state)
+    transformer.forward = forward
+    return state
 
 
 def patch_kijai(patcher, mask_fn: Callable) -> int:
@@ -270,18 +397,23 @@ def patch_kijai(patcher, mask_fn: Callable) -> int:
     if blocks is None:
         raise RuntimeError("Kijai patch path: transformer.blocks is missing.")
 
-    for block in blocks:   # L7.128: refuse before touching any block (no half-patched model)
-        cross_attn = getattr(block, "cross_attn", None)
-        problem = _kijai_signature_problem(cross_attn) if cross_attn is not None else None
-        if problem:
-            raise RuntimeError(problem)
-
+    state = None
     patched = 0
+    skipped: set = set()
     for idx, block in enumerate(blocks):
         cross_attn = getattr(block, "cross_attn", None)
         if cross_attn is None:
             continue
-        impl = _kijai_class_dispatch(cross_attn)
+        if _kijai_layout(cross_attn):
+            if type(cross_attn).__name__ not in _KIJAI_PORTED:      # L7.128: no port - leave the block untouched
+                skipped.add(type(cross_attn).__name__)
+                continue
+            impl = _kijai_cross_forward
+            if state is None:
+                state = _track_uncond(transformer)
+            setattr(cross_attn, _KIJAI_STATE_ATTR, state)
+        else:
+            impl = _kijai_class_dispatch(cross_attn)
 
         # Save original on first patch; on re-patch, overwrite the bound forward
         # but keep the original-saved one intact so restore_kijai still works.
@@ -297,6 +429,11 @@ def patch_kijai(patcher, mask_fn: Callable) -> int:
         setattr(cross_attn, _KIJAI_MARKER_ATTR, True)
         patched += 1
 
+    if skipped:
+        log.warning("Prompt Relay has no Kijai port for %s; those blocks run unchanged.", ", ".join(sorted(skipped)))
+    if not patched and skipped:
+        raise RuntimeError(f"Prompt Relay cannot drive this Kijai model: no block has a ported cross-attention "
+                           f"({', '.join(sorted(skipped))}). Nothing was patched.")
     log.info("Kijai patch path: rebound forward on %d cross_attn blocks", patched)
     return patched
 
@@ -315,17 +452,32 @@ def restore_kijai(patcher) -> int:
             continue
         orig = getattr(cross_attn, _KIJAI_ORIGINAL_ATTR, None)
         if orig is not None:
-            cross_attn.forward = orig
+            if getattr(orig, "__func__", None) is getattr(type(cross_attn), "forward", None):
+                cross_attn.__dict__.pop("forward", None)          # back to the class's own forward, no override
+            else:
+                cross_attn.forward = orig
             try:
                 delattr(cross_attn, _KIJAI_ORIGINAL_ATTR)
             except AttributeError:
                 pass
-            if hasattr(cross_attn, _KIJAI_MARKER_ATTR):
-                try:
-                    delattr(cross_attn, _KIJAI_MARKER_ATTR)
-                except AttributeError:
-                    pass
+            for attr in (_KIJAI_MARKER_ATTR, _KIJAI_STATE_ATTR):
+                if hasattr(cross_attn, attr):
+                    try:
+                        delattr(cross_attn, attr)
+                    except AttributeError:
+                        pass
             restored += 1
+    saved = getattr(transformer, _KIJAI_TFWD_ATTR, None)
+    if saved is not None:
+        if saved[0] is None:
+            transformer.__dict__.pop("forward", None)
+        else:
+            transformer.forward = saved[0]
+        for attr in (_KIJAI_TFWD_ATTR, _KIJAI_STATE_ATTR):
+            try:
+                delattr(transformer, attr)
+            except AttributeError:
+                pass
     log.info("Kijai restore path: %d blocks restored", restored)
     return restored
 
