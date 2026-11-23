@@ -184,3 +184,8 @@ overrides it when set. Works without CustomNodePacks installed.
   with the seed replaced by "randomize" (frontend 1.53 dropped a value on every load and Convert to Subgraph). Saves
   made while the bug was live already carry the wrong seed; set it again once.
 - Checked against Kijai's WanVideoWrapper v1.4.8 (commit a7439db).
+
+## Drop-downs fit the panel (2026-11-23)
+
+A drop-down in this pack's node panels with a long option (an OCIO view name, a long file name) no longer runs
+past the node edge: it shrinks to the panel and ends the text with "...". The full name is still in the list.
