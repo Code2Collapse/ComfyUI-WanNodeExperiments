@@ -180,4 +180,7 @@ overrides it when set. Works without CustomNodePacks installed.
   penalises the negative prompt. When no mask applies, the result is identical to Kijai's own output (checked on
   Kijai's real classes). Kijai feature paths Prompt Relay does not cover (NAG, audio, Lynx, FantasyPortrait, EchoShot,
   LongCat, Ovi) run unchanged, and the log says once that relay is off there. Not yet run on GPU with real weights.
+- **Prompt Extender / Prompt Extender Select (WNE) keep their seed (2026-11-23).** Saved workflows used to reload
+  with the seed replaced by "randomize" (frontend 1.53 dropped a value on every load and Convert to Subgraph). Saves
+  made while the bug was live already carry the wrong seed; set it again once.
 - Checked against Kijai's WanVideoWrapper v1.4.8 (commit a7439db).

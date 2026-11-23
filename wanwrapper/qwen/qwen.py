@@ -153,7 +153,9 @@ class WanVideoPromptExtender:
         "optional": {
             "system_prompt": (SYSTEM_PROMPT_KEYS, {"tooltip": "System prompt to use for the model."}),
             "custom_system_prompt": ("STRING", {"default": "", "forceInput": True, "tooltip": "Custom system prompt to use instead of the predefined ones."}),
-            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+            # L9.103: declared, so frontend 1.53 counts the seed control it adds anyway; without it, migrateWidgetsValues
+            # matched (one forceInput) and deleted a value on every load - the seed came back as "randomize".
+            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True}),
         }
         }
     RETURN_TYPES = ("STRING",)
@@ -212,7 +214,9 @@ class WanVideoPromptExtenderSelect:
         },
         "optional": {
             "custom_system_prompt": ("STRING", {"default": "", "forceInput": True, "tooltip": "Custom system prompt to use instead of the predefined ones."}),
-            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+            # L9.103: declared, so frontend 1.53 counts the seed control it adds anyway; without it, migrateWidgetsValues
+            # matched (one forceInput) and deleted a value on every load - the seed came back as "randomize".
+            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True}),
         }
         }
     RETURN_TYPES = ("WANVIDEOPROMPTEXTENDER_ARGS",)
